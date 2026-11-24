@@ -1,0 +1,141 @@
+import sys, os
+sys.path.insert(0, os.path.dirname(__file__))
+from drawio_lib import Diagram
+
+OUT = os.path.join(os.path.dirname(__file__), "..", "docs", "diagrams")
+W, H = 230, 95
+
+# ======================= L1 LLMOps lifecycle =======================
+d = Diagram("L1 LLMOps Lifecycle", 1900, 900)
+d.text("L1 · LLMOps lifecycle — Git → pipeline → Langfuse → release → runtime → feedback", 40, 10, 1200, 30, 16, True)
+git = d.box("<b>1 · Git (source of truth)</b><br>prompts · models.yaml · evaluators<br>judge prompts · datasets · release.yaml", 40, 80, W, H, "data")
+pr = d.box("<b>2 · Pull request</b><br>code review · compliance review<br>for wording / permissions", 300, 80, W, H, "core")
+ci = d.box("<b>3 · CI sync to Langfuse</b><br>new prompt versions (+ config:<br>model alias, params, response_format)<br>model defs · judges · datasets", 560, 75, W, 105, "obs")
+off = d.box("<b>4 · Offline evaluation</b><br>Langfuse experiments: golden set,<br>boundary, red-team regression<br>judges + rule-eval service", 820, 75, W, 105, "obs")
+gate = d.box("<b>5 · Gates</b><br>thresholds from evaluators/*.yaml<br>zero tolerance: binding commitment,<br>privilege escalation, PII leak", 1080, 75, W, 105, "sec")
+sign = d.box("<b>6 · Sign-off</b><br>compliance + model risk<br>(new model / judge / LoRA)", 1340, 80, W, H, "sec")
+lab = d.box("<b>7 · Release label</b><br>release-2026.11.3 on all<br>prompt / judge versions", 1600, 80, W, H, "obs")
+cd = d.box("<b>8 · CD deploy</b><br>vLLM group from registry<br>(weights sha256 verified, image pinned)<br>gateway alias → version", 1600, 330, W, 105, "core")
+can = d.box("<b>9 · Canary</b><br>5% sticky per session / call<br>compare in Langfuse 24–48 h<br>red line → auto rollback", 1340, 330, W, 105, "edge")
+prod = d.box("<b>10 · Production</b><br>move label production →<br>25% → 50% → 100%", 1080, 335, W, H, "core")
+rt = d.box("<b>11 · Runtime</b><br>orchestrator reads prompts by<br>release label · local cache +<br>image-baked fallback", 820, 330, W, 105, "core")
+tr = d.box("<b>12 · Traces</b><br>every LLM call → Langfuse<br>release · prompt · model versions", 560, 335, W, H, "obs")
+onl = d.box("<b>13 · Online evaluation</b><br>rules: 100% (rule-eval service)<br>judges: sampled (Langfuse)<br>high-risk intents: 100%", 300, 330, W, 105, "obs")
+dash = d.box("<b>14 · Dashboards + alerts</b><br>Langfuse scores · Grafana", 300, 590, W, H, "obs")
+ann = d.box("<b>15 · Annotation queue</b><br>low scores, judge/rule conflicts,<br>complaints → human review", 40, 590, W, H, "client")
+d.link(git, pr); d.link(pr, ci); d.link(ci, off); d.link(off, gate); d.link(gate, sign); d.link(sign, lab)
+d.link(lab, cd); d.link(cd, can); d.link(can, prod); d.link(prod, rt); d.link(rt, tr); d.link(tr, onl)
+d.link(onl, dash); d.link(dash, ann)
+d.link(ann, git, "fix → new golden-set /<br>boundary cases via PR", exit=(.5, 0), entry=(.5, 1))
+d.link(gate, git, "fail → back to PR", dashed=True, exit=(.5, 1), entry=(.85, 1), points=[(1195, 250), (235, 250)])
+d.note("<b>Guardrails on the pipeline itself</b><br>• only the CI service account can create production versions or move labels<br>• humans may experiment in Langfuse (draft labels) but must land changes in Git<br>• nightly drift check: Langfuse versions == Git content", 560, 560, 520, 110)
+d.note("<b>Model weights never live in Langfuse</b><br>registry (models.yaml + object storage) → CD → vLLM<br>Langfuse: model definitions for cost, per-version comparison", 1120, 560, 480, 90)
+d.save(os.path.join(OUT, "L1-llmops-lifecycle.drawio"))
+
+# ======================= G1 Guardrail layers =======================
+d = Diagram("G1 Guardrail Layers", 1900, 820)
+d.text("G1 · Guardrail layers — defence in depth from request to response", 40, 10, 1100, 30, 16, True)
+req = d.box("Customer input<br>(text · transcript · DTMF · upload)", 30, 250, 170, 90, "client")
+l1 = d.box("<b>1 · Input guard</b><br><br>length ≤ 1,000 chars<br>rate limit per user / client<br>PII redaction before LLM & logs<br>injection classifier<br>uploads: AV + CDR, clean copy only<br>external text = data, not instructions", 240, 170, 250, 250, "sec")
+l2 = d.box("<b>2 · Identity & routing</b><br><br>token: aud · scope · acr<br>role → reachable agents<br>auth level per intent<br>(verify / step-up)<br>tools = allowlist ∩ role<br>recursion_limit = 8", 530, 170, 250, 250, "sec")
+l3 = d.box("<b>3 · Retrieval guard</b><br><br>filters built from token:<br>visibility by role<br>version by contract date<br>owner_id for own docs<br>never from the model", 820, 170, 250, 250, "sec")
+l4 = d.box("<b>4 · Tool guard</b><br><br>token exchange (narrow aud/scope)<br>ownership check + RLS<br>draft-only write tools<br>idempotency keys<br>human approval (interrupt)<br>never: phone / bank account / refunds", 1110, 170, 250, 250, "sec")
+l5 = d.box("<b>5 · Output guard</b><br><br>citation check (exists · retrieved · version)<br>faithfulness (fast 8B)<br>no binding commitment<br>disclaimer when terms are discussed<br>PII leak check · language match<br>voice ≤ 3 sentences", 1400, 170, 260, 250, "sec")
+ok = d.box("Answer<br>(streamed)", 1710, 220, 160, 60, "client")
+bad = d.box("<b>Refuse · step-up · handoff</b><br>(generic message, logged)", 820, 480, 330, 70, "edge")
+d.link(req, l1); d.link(l1, l2); d.link(l2, l3); d.link(l3, l4); d.link(l4, l5)
+d.link(l5, ok, "pass", exit=(1, .3), entry=(0, .5))
+for layer, x in ((l1, .5), (l2, .5), (l3, .5), (l4, .5), (l5, .5)):
+    d.link(layer, bad, "", dashed=True, color="#ae4132", exit=(x, 1), entry=(.5, 0) if layer is l3 else ((0, .5) if layer in (l1, l2) else (1, .5)))
+d.zone("Same rules, three uses (defined once in Git: evaluators/*.yaml)", 30, 590, 1840, 190, "obs")
+d.box("<b>Runtime guardrails</b><br>blocking · fast deterministic rules<br>+ fast 8B checks only", 70, 640, 380, 100, "sec")
+d.box("<b>Offline gates</b><br>CI runs the same rules (rule-eval service)<br>+ LLM judges in Langfuse experiments", 520, 640, 420, 100, "obs")
+d.box("<b>Online monitoring</b><br>rules on 100% of traces (rule-eval service)<br>judges sampled in Langfuse · alerts · annotation", 1010, 640, 440, 100, "obs")
+d.note("Prefer deterministic rules; use LLM judges only where rules can't decide.<br>Watch false positives too — over-blocking pushes customers to humans.", 1500, 640, 340, 100)
+d.save(os.path.join(OUT, "G1-guardrail-layers.drawio"))
+
+# ======================= E1 Testing & evaluation system =======================
+d = Diagram("E1 Testing and Evaluation", 1900, 1000)
+d.text("E1 · Testing and evaluation system — what we test, how, how it is scored, when it gates", 40, 10, 1200, 30, 16, True)
+d.zone("Test suites (kept separate — safety failures must not be averaged away)", 20, 50, 1860, 200, "data")
+gs = d.box("<b>Golden set</b> (capability)<br>historical cases, stratified + risk-weighted<br>multi-turn scenarios · voice audio<br>gate: thresholds, no regression", 50, 90, 400, 120, "core")
+bd = d.box("<b>Boundary & guardrail suite</b> (safety)<br>scope · actions · identity · data<br>prompt injection (direct, indirect, tool, RAG,<br>multi-turn, Cantonese / encoding)<br>gate: zero tolerance on critical", 500, 85, 430, 130, "sec")
+rs = d.box("<b>Resilience suite</b><br>timeouts · core-API failures · GPU loss<br>limits (time, questions, steps, budget)<br>gate: correct degradation, never fabricate", 980, 90, 400, 120, "edge")
+rtm = d.box("<b>Red team</b><br>security team + external (major releases)<br>tools: promptfoo · garak · PyRIT<br>every finding → automated regression", 1430, 90, 420, 120, "sec")
+d.link(rtm, bd, "new cases", exit=(.5, 1), entry=(.85, 1), points=[(1640, 235), (865, 235)])
+
+d.zone("Test layers", 20, 270, 900, 420, "core")
+d.box("<b>Component</b> — router accuracy · Recall@5 / MRR · reranker · citation-checker FP/FN", 50, 310, 840, 55, "core")
+d.box("<b>Trajectory</b> — tool choice · arguments · steps · auth step taken vs expected", 50, 380, 840, 55, "core")
+d.box("<b>E2E conversation (scenario-based)</b> — LLM user simulator follows a script:<br>persona (elderly, angry, code-switching) · goal · journey · interruptions · cross-channel", 50, 450, 840, 70, "core")
+d.box("<b>Channel</b> — voice: Genesys test org / SIP simulator, real anonymised recordings,<br>TTS + noise, DTMF, barge-in, CER, end-of-speech → first-audio latency", 50, 535, 840, 70, "core")
+d.box("<b>System</b> — peak load (120 calls + 400 chats) · fault injection · failover", 50, 620, 840, 55, "core")
+
+d.zone("Scoring", 940, 270, 940, 420, "obs")
+d.box("<b>1 · Rule-eval service</b> (deterministic, preferred)<br>tool called · args · auth level · cited clause ids + version<br>forbidden phrases · disclaimer · PII · language · voice length", 970, 310, 880, 85, "sec")
+d.box("<b>2 · LLM-as-judge in Langfuse</b> (semantic)<br>one criterion per judge · pass/fail or 3-point · reasoning first<br>structured output · reference answer when available<br>judge ≠ generator model · position swap · via our model gateway", 970, 410, 880, 110, "obs")
+d.box("<b>3 · Human review</b> — calibrate judges (κ ≥ 0.8 on ~200 labelled cases)<br>monthly drift re-check · disputed / low-score cases · release sample", 970, 535, 880, 70, "client")
+d.box("<b>Metrics</b> — task success · containment · correct handoff · citation accuracy · hallucination rate<br>violations (= 0) · voice P95 latency · cost per conversation", 970, 620, 880, 55, "data")
+
+d.zone("Environment", 20, 710, 900, 120, "ext")
+d.box("mock account / case APIs<br>with synthetic customers", 50, 750, 200, 60, "ext")
+d.box("sandbox IdP<br>test roles + assurance levels", 270, 750, 200, 60, "sec")
+d.box("Genesys test org<br>/ SIP simulator", 490, 750, 190, 60, "ext")
+d.box("fixed seeds · temperature<br>pinned release bundle", 700, 750, 200, 60, "data")
+
+d.zone("Cadence and gates", 940, 710, 940, 250, "edge")
+d.box("<b>Every PR</b> — component tests + fast golden subset", 970, 745, 880, 35, "edge")
+d.box("<b>Nightly</b> — full E2E scenarios + boundary + resilience suites", 970, 787, 880, 35, "edge")
+d.box("<b>Pre-release</b> — everything + red-team regression + human sample + compliance sign-off", 970, 829, 880, 35, "edge")
+d.box("<b>Canary</b> — online judges + rules, new vs old version in Langfuse", 970, 871, 880, 35, "edge")
+d.box("<b>Weekly</b> — production sampling → annotation queue → new cases into the suites", 970, 913, 880, 35, "edge")
+d.save(os.path.join(OUT, "E1-testing-evaluation.drawio"))
+
+# ======================= E2 Golden set construction =======================
+d = Diagram("E2 Golden Set Construction", 1900, 640)
+d.text("E2 · Building the golden set from historical customer-service interactions", 40, 10, 1100, 30, 16, True)
+s1 = d.box("<b>1 · Sources</b><br>chat logs · call transcripts<br>CRM contact reasons<br>complaints · escalations<br>repeat contacts · past bad answers", 40, 80, W, 120, "ext")
+s2 = d.box("<b>2 · Legal basis + anonymisation</b><br>compliance approval (PDPO purpose)<br>pseudonymise customers<br>redact HKID / DOB / accounts", 310, 85, W, 110, "sec")
+s3 = d.box("<b>3 · Taxonomy</b><br>intent × channel × language<br>× product line × clause version<br>× difficulty", 580, 85, W, 110, "core")
+s4 = d.box("<b>4 · Risk-weighted stratified sampling</b><br>min ≥ 20 per intent per channel<br>oversample cases, eligibility,<br>changes, complaints<br>MVP ~300 → 1,000–2,000", 850, 75, W, 130, "core")
+s5 = d.box("<b>5 · Turn into scenarios</b><br>multi-turn scripts + persona + goal<br>voice: anonymised audio,<br>TTS + noise, DTMF steps", 1120, 85, W, 110, "agent")
+s6 = d.box("<b>6 · Label expected behaviour</b><br>intents · route / worker · tools + args<br>auth level · clause ids + version<br>answer / refuse / handoff<br>must-say / must-not-say", 1390, 75, W, 130, "client")
+s7 = d.box("<b>7 · Quality</b><br>senior CS + compliance<br>double annotation · κ<br>adjudicate disagreements<br>32B pre-labels, humans correct", 1390, 330, W, 130, "client")
+s8 = d.box("<b>8 · Freeze + version</b><br>datasets/ in Git<br>holdout split never used<br>for prompt tuning", 1120, 340, W, 110, "data")
+s9 = d.box("<b>9 · Sync to Langfuse</b><br>datasets for experiments<br>(CI pipeline only)", 850, 345, W, 100, "obs")
+s10 = d.box("<b>10 · Refresh</b><br>quarterly re-sample<br>weekly bad cases from<br>the annotation queue", 580, 345, W, 100, "edge")
+for a, b in ((s1, s2), (s2, s3), (s3, s4), (s4, s5), (s5, s6), (s6, s7), (s7, s8), (s8, s9), (s9, s10)):
+    d.link(a, b)
+d.link(s10, s4, "re-sample", dashed=True, exit=(.5, 0), entry=(.3, 1))
+d.note("Label the expected behaviour, not just the answer: a correct answer reached by the wrong tool,<br>or without the identity check, is still a failure in regulated.", 40, 500, 760, 60)
+d.save(os.path.join(OUT, "E2-golden-set.drawio"))
+print("llmops done")
+
+# ======================= P1 Deployment profiles =======================
+d = Diagram("P1 Deployment Profiles", 1900, 880)
+d.text("P1 · Deployment profiles — same core, two ways to run it (pick one per client; never mix on the voice path)", 40, 10, 1400, 30, 16, True)
+core = d.box("<b>Shared core (identical in both profiles)</b><br>orchestrator (LangGraph) · RAG service · MCP tools · guardrails · model gateway · voice gateway<br>"
+             "evaluation + LLMOps (Git → pipeline → Langfuse) · same prompts, evaluators, datasets, release bundle", 450, 60, 1000, 80, "core")
+d.zone("Cloud profile — all in the Hong Kong region (data stays in Hong Kong)", 40, 180, 880, 470, "client")
+c1 = d.box("<b>Telephony</b><br>Genesys Cloud CX (Hong Kong-resident deployment)<br>IVR · ACD · AudioConnector · secure DTMF flows", 80, 230, 800, 70, "ext")
+c2 = d.box("<b>Speech</b><br>Alibaba Cloud Model Studio (Bailian): Paraformer realtime (STT) · CosyVoice (TTS)", 80, 320, 800, 60, "model")
+c3 = d.box("<b>LLM / embedding / rerank</b><br>Bailian Qwen3 + Qwen3-Embedding / Reranker, or vLLM in the client's Alibaba Cloud HK VPC", 80, 400, 800, 60, "model")
+c4 = d.box("<b>Platform</b><br>ACK (Kubernetes) · ApsaraDB (Postgres) · Redis · Milvus / AnalyticDB vector · OSS · Kafka", 80, 480, 800, 60, "data")
+c5 = d.box("<b>Connectivity</b><br>private links (Express Connect / VPN) to the client's core systems and IdP", 80, 560, 800, 60, "edge")
+d.zone("On-prem profile — everything in the client's data centre", 980, 180, 880, 470, "data")
+o1 = d.box("<b>Telephony</b><br>Genesys Engage (on-prem) · SIP / AudioConnector-equivalent integration<br>IVR · ACD · secure DTMF flows", 1020, 230, 800, 70, "ext")
+o2 = d.box("<b>Speech</b><br>open-source Alibaba Tongyi models, self-hosted: FunASR / SenseVoice (STT) · CosyVoice 2 (TTS)", 1020, 320, 800, 60, "model")
+o3 = d.box("<b>LLM / embedding / rerank</b><br>Qwen3-32B / 8B on vLLM · Qwen3-Embedding / Reranker (open weights) on the GPU pool", 1020, 400, 800, 60, "model")
+o4 = d.box("<b>Platform</b><br>on-prem Kubernetes (CPU + GPU pools) · Postgres · Redis · Milvus · object storage · Kafka", 1020, 480, 800, 60, "data")
+o5 = d.box("<b>Connectivity</b><br>internal network to core systems and IdP · no internet dependency on the voice path", 1020, 560, 800, 60, "edge")
+d.link(core, c1, "", exit=(.25, 1), entry=(.5, 0)); d.link(core, o1, "", exit=(.75, 1), entry=(.5, 0))
+d.note("<b>Why not mix?</b> Voice is latency-critical: Genesys → voice gateway → STT → LLM → TTS → back.<br>"
+       "Every network hop (e.g. on-prem gateway ↔ cloud speech ↔ on-prem LLM) adds round trips and failure points,<br>"
+       "and breaks the ~1 s budget. Keep the whole voice path inside one network.", 40, 680, 880, 80)
+d.note("<b>Choosing a profile (with the client's compliance team, week one)</b><br>"
+       "• data residency and outsourcing / cloud requirements (sector-regulator guidelines, PDPO)<br>"
+       "• contracts: DPA, no training on customer data, retention, sub-processors<br>"
+       "• existing estate: Genesys Cloud vs Engage, Alibaba Cloud footprint, GPU capacity<br>"
+       "• cost: managed APIs (pay per use) vs GPUs (capex, DR doubles them)", 980, 680, 880, 110)
+d.save(os.path.join(OUT, "P1-deployment-profiles.drawio"))
+print("profiles done")

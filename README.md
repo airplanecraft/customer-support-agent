@@ -449,6 +449,21 @@ It is encoded, **not encrypted**, so no sensitive data goes into it.
 2. The approver signs in with **staff SSO**. The approval service checks the role, that the **approver is not the drafter**, and that the draft is still valid, then resumes the graph with `Command(resume=…)`.
 3. The change is applied through the internal API gateway with a token **exchanged on behalf of the approver**, so the core system logs the real approver and enforces its own limits.
 
+**Whose token is used where.** Approval doesn't involve the customer's token at all.
+
+| | Request (customer) | Approval and execution (staff) |
+|---|---|---|
+| Actor | The verified customer | The approver |
+| Token | The customer's own token, after verification and step-up | The approver's own staff SSO token |
+| Authorization | Ownership: the customer can only touch their own data (`sub`) | The approver's **role** plus **assignment** to this case |
+| Which customer's data | `sub` in the customer's token | `customer_id` stored on the **task**, not a customer token |
+
+- The task stores `customer_id`, `requested_by`, the request, and the **step-up evidence** (the customer's consent, captured at request time). It never stores a token.
+- When the session ends, the customer's token is deleted. Nothing later needs it.
+- **Maker-checker:** the approver can't be the requester or the drafter. **The agent can never approve**; only a human staff token is accepted at that step.
+- **Audit:** `requested_by = customer`, `approved_by = approver`, `executed_by = approver` (`act` = the executor service).
+- **Exception:** if policy requires the customer to **reconfirm after approval** (for example, a high-value change), the customer re-authenticates at that point, such as with a CIBA push. That is a separate customer consent step, not part of the approver's authorization.
+
 ![C4 Approval](docs/img/C4-approval-account-change.png)
 *C4 · Account change with human approval — source: [`C4-approval-account-change.drawio`](docs/diagrams/C4-approval-account-change.drawio)*
 

@@ -24,16 +24,17 @@ It is designed for **regulated industries** (financial services, healthcare, tel
 8. [Identity, authentication and authorization](#8-identity-authentication-and-authorization)
 9. [Business flows](#9-business-flows)
 10. [Sessions, tasks and recovery](#10-sessions-tasks-and-recovery)
-11. [Events and cross-channel sync](#11-events-and-cross-channel-sync)
-12. [Guardrails](#12-guardrails)
-13. [Evaluation and testing](#13-evaluation-and-testing)
-14. [LLMOps: Git, pipeline and Langfuse](#14-llmops-git-pipeline-and-langfuse)
-15. [Observability, audit and per-call records](#15-observability-audit-and-per-call-records)
-16. [Security checklist](#16-security-checklist)
-17. [Deployment profiles: cloud vs on-prem](#17-deployment-profiles-cloud-vs-on-prem)
-18. [Known trade-offs and open questions](#18-known-trade-offs-and-open-questions)
-19. [Repository layout and regenerating the diagrams](#19-repository-layout-and-regenerating-the-diagrams)
-20. [Tech stack](#20-tech-stack)
+11. [State, memory and caching](#11-state-memory-and-caching)
+12. [Events and cross-channel sync](#12-events-and-cross-channel-sync)
+13. [Guardrails](#13-guardrails)
+14. [Evaluation and testing](#14-evaluation-and-testing)
+15. [LLMOps: Git, pipeline and Langfuse](#15-llmops-git-pipeline-and-langfuse)
+16. [Observability, audit and per-call records](#16-observability-audit-and-per-call-records)
+17. [Security checklist](#17-security-checklist)
+18. [Deployment profiles: cloud vs on-prem](#18-deployment-profiles-cloud-vs-on-prem)
+19. [Known trade-offs and open questions](#19-known-trade-offs-and-open-questions)
+20. [Repository layout and regenerating the diagrams](#20-repository-layout-and-regenerating-the-diagrams)
+21. [Tech stack](#21-tech-stack)
 
 ---
 
@@ -102,9 +103,9 @@ Both channels handle four kinds of request:
 | **Approval service** | Staff approvals with separation of duties; resumes paused graphs |
 | **Notification service** | Post-call message to the chat thread, as a push notification, or by SMS |
 | **Data** | Postgres (checkpoints, tasks, interactions, audit index), Redis (sessions, OTP, rate limits, caches), Milvus (dense + BM25), object storage (clauses, uploads, recordings), Kafka (events) |
-| **Guardrail library** | Input and output rules shared by the runtime guardrails and the rule-eval service ([section 12](#12-guardrails)) |
+| **Guardrail library** | Input and output rules shared by the runtime guardrails and the rule-eval service ([section 13](#13-guardrails)) |
 | **Observability** | ELK (service logs), Prometheus + Grafana (metrics, alerts); LLM traces go to Langfuse |
-| **LLMOps plane** | **Git** (source of truth for prompts, model manifest, evaluators, judge prompts, datasets, release manifest) → **CI/CD pipeline** (the only writer to Langfuse) → **Langfuse** (prompt versions and config, datasets and experiments, LLM-as-judge, traces, annotation queues) · **rule-eval service** · **model registry** · **test harness** ([section 14](#14-llmops-git-pipeline-and-langfuse)) |
+| **LLMOps plane** | **Git** (source of truth for prompts, model manifest, evaluators, judge prompts, datasets, release manifest) → **CI/CD pipeline** (the only writer to Langfuse) → **Langfuse** (prompt versions and config, datasets and experiments, LLM-as-judge, traces, annotation queues) · **rule-eval service** · **model registry** · **test harness** ([section 15](#15-llmops-git-pipeline-and-langfuse)) |
 
 ---
 
@@ -299,7 +300,7 @@ A **related-history lookup** runs in parallel with retrieval: same customer, int
 - **cloud profile:** Bailian (Qwen, Paraformer, CosyVoice) or vLLM in the client's Alibaba Cloud Hong Kong VPC;
 - **on-prem profile:** the same model families as open weights on vLLM, plus FunASR and CosyVoice.
 
-See [section 17](#17-deployment-profiles-cloud-vs-on-prem).
+See [section 18](#18-deployment-profiles-cloud-vs-on-prem).
 
 ---
 
@@ -396,7 +397,7 @@ It is encoded, **not encrypted**, so no sensitive data goes into it.
   - `act` = the calling agent.
 - The MCP server and the internal gateway validate it, and the core system enforces **ownership** (row-level security: `owner = token.customer_no`).
 - **Staff tokens** carry the staff ID; access to a customer's data requires an assignment to that customer's case.
-- **Inside the agent:** LangGraph state and config hold only an opaque **`auth_ref`**. The token sits in an encrypted store with a TTL; tools resolve the reference, exchange the token, and **fail closed** with a re-auth if it has gone. Tokens are never placed in checkpoints, messages, logs, traces or Kafka.
+- **Inside the agent:** LangGraph state and config hold only an opaque **`auth_ref`**. The token sits in an encrypted store with a TTL; tools resolve the reference, exchange the token, and **fail closed** with a re-auth if it has gone. Tokens are never placed in checkpoints, messages, logs, traces or Kafka. Token store controls: [section 11.5](#115-token-store).
 - **Long pauses** (multi-day approvals) don't reuse the customer's token. The approver's own identity and a narrowly scoped service account complete the action, and state keeps only the authorization facts.
 
 ![B5 Step-up](docs/img/B5-step-up.png)
@@ -487,7 +488,7 @@ It is encoded, **not encrypted**, so no sensitive data goes into it.
 - **Assurance expires sooner**, after 15 minutes idle, which triggers step-up before personal data is shown again.
 - **A returning customer** starts a new session and must re-verify, but open tasks are offered for resumption, across channels too.
 
-**After verification**, a compact context is loaded: open tasks, a 7-day summary, preferences and flags. Older history stays behind an on-demand tool. **Before verification**, prefetched data is used only for routing, risk and language; it is never spoken.
+**After verification**, a compact context is loaded: open tasks, recent session summaries, preferences and flags ([section 11](#11-state-memory-and-caching)). Older history stays behind an on-demand tool. **Before verification**, prefetched data is used only for routing, risk and language; it is never spoken.
 
 **Recovery**
 
@@ -504,7 +505,105 @@ Every side-effecting tool takes an **idempotency key** (`task_id` + step), so a 
 
 ---
 
-## 11. Events and cross-channel sync
+## 11. State, memory and caching
+
+**Built on LangGraph and LangChain primitives; no LangMem** (see 11.3).
+
+![M1 State and memory](docs/img/M1-state-memory.png)
+*M1 · State and memory layers — source: [`M1-state-memory.drawio`](docs/diagrams/M1-state-memory.drawio)*
+
+### 11.1 Agent state (short-term, per session)
+
+| Field | Purpose |
+|---|---|
+| `messages`, `summary` | Last N turns verbatim; older turns folded into a summary |
+| `channel`, `language` | Voice or chat rendering; reply language |
+| `customer_id` | Set only after verification, from the token's `sub` |
+| `assurance` | Level (anonymous, verified, step-up), `verified_at`, `expires_at` |
+| `auth_ref` | Opaque pointer to the token store; never the token itself |
+| `intents`, `current_worker` | Router output (fixed enum) and the active worker |
+| `task_ids`, `pending_draft` | Links to the task table; the draft awaiting approval |
+| guard counters | Turns, tool calls, retries, used for limits and handoff |
+| `release` | Release label pinned for the session, so prompts and models don't change mid-conversation |
+| retrieved chunk IDs | IDs and versions for citations and audit, not full text |
+
+**Never in state, checkpoints or memory:** tokens, OTPs, raw audio, full ID or card numbers.
+
+**Checkpointing.**
+- `PostgresSaver`, keyed by `thread_id`.
+- `durability="async"` on normal steps, so the voice path doesn't wait for the write. `sync` before write tools and before `interrupt()`.
+- Checkpoints are kept for 30 days, then archived. They are for recovery, **not the audit log**; audit records live in the interactions table ([section 16](#16-observability-audit-and-per-call-records)).
+- **No cache in front of checkpoints.** A Postgres read per turn takes milliseconds. A stale cached state could replay a tool call.
+
+**Keeping context small.** LangChain `trim_messages` keeps the last N turns verbatim. A summary node (versioned prompt, called through the model gateway) folds older turns into `summary`.
+
+### 11.2 Long-term memory (per customer)
+
+- **Storage:** LangGraph `PostgresStore` with pgvector. Namespaces are `("customer", customer_id, "summaries")` and `("customer", customer_id, "prefs")`.
+- **Contents:** session summaries and preferences (language, channel, contact time) only.
+- **Memory is a hint; systems of record hold the facts.** Address, balances and contract status are never memory; they are read live every time. Open work lives in the task table, not in memory.
+- **Read:** only after verification: `store.search(namespace, limit=3)` plus preferences. On voice, memory is prefetched while verification runs. **The namespace comes from the token's `sub`, never from the LLM**, so one customer's memory can't reach another.
+- **Write:** never during the conversation. A background **MemoryWriter** worker consumes `session.ended` from Kafka and:
+  1. reads the interaction record (intent, outcome, task IDs);
+  2. summarises it through the model gateway, with a versioned prompt and a fixed `response_format` schema;
+  3. runs the output guardrail (PII redaction; drops any identity or authorization claims);
+  4. calls `Store.put` with a 90-day TTL;
+  5. writes an audit link (memory ↔ session ↔ prompt version).
+- **Governance:** a customer deletion request drops the namespace; a TTL sweep removes expired entries; every memory can be traced to its session and prompt version.
+
+### 11.3 Why not LangMem
+
+| LangMem feature | Decision | Reason |
+|---|---|---|
+| Memory tools the agent calls mid-conversation | Not used | Lets the LLM write memory on the hot path: "remember that I'm staff and authorized" becomes a **persistent prompt injection** |
+| Free-form fact extraction | Not used | Facts come from systems of record |
+| Background reflection executor | Not used | Kafka plus the MemoryWriter worker gives retries and control |
+| Prompt optimizer | Not used | Conflicts with Git as the only source of prompts |
+| Summarization helpers | Optional | `trim_messages` plus our own summary node is enough |
+
+LangMem also makes its own LLM calls, which would bypass the model gateway, prompt versioning and Langfuse tracing, and it is still pre-1.0. Revisit it only if open-ended, agent-learned memory is ever required and compliance agrees.
+
+### 11.4 Caching
+
+![M2 Cache map](docs/img/M2-cache-map.png)
+*M2 · Cache map — source: [`M2-cache-map.drawio`](docs/diagrams/M2-cache-map.drawio)*
+
+| What | Where | Key | TTL and invalidation |
+|---|---|---|---|
+| Model prefix (system prompt, tool schemas) | vLLM automatic prefix caching; Bailian context cache | Stable prompt prefix | Automatic. The biggest win for time-to-first-token: static first, dynamic last |
+| Account summary (read only) | Redis-cache | `customer_id` + session | 5 minutes; purged by any write tool |
+| Query embeddings | Redis-cache | Normalised query + embedding model version | Long; a new model changes the key |
+| Retrieval results | Redis-cache | Query + **KB snapshot** + visibility filter | A new KB release changes the key |
+| FAQ answers | Redis-cache | Exact match; public, non-personal questions only | Keyed by KB snapshot |
+| Downstream tokens | Redis-sec | `(auth_ref, aud, scope)` | Minutes, below the token's expiry |
+| JWKS, prompts, rate limits, OTP, BFF sessions | Gateway, orchestrator, Redis | — | See sections 8 and 15 |
+
+**Invalidation is by version in the key** (KB snapshot, embedding model, release label), so a release needs no manual purge. The only explicit purge is write tools → account summary.
+
+**Never cached:** write-tool results; entitlements and permissions (or 60 seconds at most); semantic caching of personalised answers (reusing A's answer for B is an incident); checkpoints.
+
+### 11.5 Token store
+
+An encrypted Redis store holding `auth_ref → access token` is a common, sound pattern: it is fast, has native TTLs, is shared by stateless pods, and losing it only forces re-authentication. The risk is that a compromised Redis exposes every live token, so:
+
+| Control | Detail |
+|---|---|
+| Application-level encryption | AES-GCM before the write; data keys from KMS or Vault transit. `auth_ref` and `customer_id` are bound as associated data, so ciphertext moved to another key won't decrypt |
+| Unguessable keys | 128-bit random `auth_ref`, never `customer_id` |
+| TTL | The earlier of token expiry and session end, minus about 30 seconds. Deleted at hang-up, logout or step-down |
+| No refresh tokens | The agent side holds access tokens only. Web refresh tokens stay in the BFF; app refresh tokens in the device keychain; voice has none |
+| Sender-constrained tokens | Where supported, mTLS-bound (RFC 8705) or DPoP, so a stolen token is useless without the key |
+| Dedicated instance (**Redis-sec**) | Separate from Redis-cache; TLS; per-service ACLs (only the auth service writes or deletes; the orchestrator reads `tok:*`) |
+| Hardening | No RDB/AOF and no backups; `KEYS`, `MONITOR`, `CONFIG`, `FLUSHALL` disabled; network policy |
+| Eviction | `volatile-ttl` or `noeviction`; a missing token fails closed with re-authentication |
+| Revocation | Short TTLs bound the window; the gateway introspects for high-risk write calls |
+| Logging | Token values never reach logs, traces or Kafka; only `auth_ref` |
+
+**Long pauses don't keep tokens alive.** Approvals use the approver's own token ([section 9](#9-business-flows), C4); a task never stores a token.
+
+---
+
+## 12. Events and cross-channel sync
 
 ![D1 Events](docs/img/D1-events-cross-channel.png)
 *D1 · Events and cross-channel sync — source: [`D1-events-cross-channel.drawio`](docs/diagrams/D1-events-cross-channel.drawio)*
@@ -517,7 +616,7 @@ Every side-effecting tool takes an **idempotency key** (`task_id` + step), so a 
 
 ---
 
-## 12. Guardrails
+## 13. Guardrails
 
 ![G1 Guardrail layers](docs/img/G1-guardrail-layers.png)
 *G1 · Guardrail layers — source: [`G1-guardrail-layers.drawio`](docs/diagrams/G1-guardrail-layers.drawio)*
@@ -541,7 +640,7 @@ Defence in depth: any layer can refuse, require step-up, or hand off to a human,
 
 ---
 
-## 13. Evaluation and testing
+## 14. Evaluation and testing
 
 ![E1 Testing and evaluation](docs/img/E1-testing-evaluation.png)
 *E1 · Testing and evaluation system — source: [`E1-testing-evaluation.drawio`](docs/diagrams/E1-testing-evaluation.drawio)*
@@ -667,7 +766,7 @@ owner: compliance
 
 ---
 
-## 14. LLMOps: Git, pipeline and Langfuse
+## 15. LLMOps: Git, pipeline and Langfuse
 
 ![L1 LLMOps lifecycle](docs/img/L1-llmops-lifecycle.png)
 *L1 · LLMOps lifecycle — source: [`L1-llmops-lifecycle.drawio`](docs/diagrams/L1-llmops-lifecycle.drawio)*
@@ -722,7 +821,7 @@ owner: compliance
 
 ---
 
-## 15. Observability, audit and per-call records
+## 16. Observability, audit and per-call records
 
 | Tool | Answers |
 |---|---|
@@ -756,7 +855,7 @@ All three are correlated by `trace_id`.
 
 ---
 
-## 16. Security checklist
+## 17. Security checklist
 
 - **Prompt injection:**
   - external content (uploads, emails, web pages) is data, never instructions;
@@ -778,7 +877,7 @@ All three are correlated by `trace_id`.
 
 ---
 
-## 17. Deployment profiles: cloud vs on-prem
+## 18. Deployment profiles: cloud vs on-prem
 
 ![P1 Deployment profiles](docs/img/P1-deployment-profiles.png)
 *P1 · Deployment profiles — source: [`P1-deployment-profiles.drawio`](docs/diagrams/P1-deployment-profiles.drawio)*
@@ -805,7 +904,7 @@ This design **assumes the cloud profile keeps all data in Hong Kong**. That must
 
 ---
 
-## 18. Known trade-offs and open questions
+## 19. Known trade-offs and open questions
 
 | # | Topic | Trade-off or open question | Position taken |
 |---|---|---|---|
@@ -821,7 +920,7 @@ This design **assumes the cloud profile keeps all data in Hong Kong**. That must
 
 ---
 
-## 19. Repository layout and regenerating the diagrams
+## 20. Repository layout and regenerating the diagrams
 
 ```
 docs/diagrams/*.drawio   editable draw.io sources (open in draw.io or the VS Code Draw.io extension)
@@ -829,6 +928,7 @@ docs/img/*.png           exported previews used in this README
 tools/drawio_lib.py      tiny generator for component and sequence diagrams
 tools/gen_components.py  A1–A4, R1–R3
 tools/gen_sequences.py   B1–B5, C1–C4, D1–D2
+tools/gen_state.py       M1–M2
 tools/gen_llmops.py      L1, G1, E1, E2, P1
 ```
 
@@ -836,6 +936,7 @@ tools/gen_llmops.py      L1, G1, E1, E2, P1
 python3 tools/gen_components.py
 python3 tools/gen_sequences.py
 python3 tools/gen_llmops.py
+python3 tools/gen_state.py
 for f in docs/diagrams/*.drawio; do
   /Applications/draw.io.app/Contents/MacOS/draw.io -x -f png -s 1 -o "docs/img/$(basename "$f" .drawio).png" "$f"
 done
@@ -845,6 +946,6 @@ The diagrams are generated from code so they stay consistent and diffable. You c
 
 ---
 
-## 20. Tech stack
+## 21. Tech stack
 
 LangGraph · LangChain · vLLM · Qwen3 (32B / 8B / 30B-A3B) · Qwen3-Embedding · Qwen3-Reranker · Qwen2.5-VL · Alibaba Cloud Model Studio (Bailian: Qwen, Paraformer, CosyVoice) · FunASR / SenseVoice · CosyVoice · Genesys Cloud CX / Engage (AudioConnector, Architect, Data Actions) · Milvus (dense + BM25) · Postgres · Redis · Kafka · Kubernetes (CPU/GPU pools, KEDA, NVIDIA GPU Operator) · Istio/Linkerd (mTLS) · OIDC IdP (e.g. Keycloak) with token exchange and CIBA · Apigee/Kong · Vault · cert-manager · Argo CD · Langfuse (prompts, datasets, LLM-as-judge, traces) · promptfoo / garak / PyRIT (red team) · ELK · Prometheus/Grafana

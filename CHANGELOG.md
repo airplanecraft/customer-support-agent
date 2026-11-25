@@ -8,6 +8,16 @@ Newest first. Each entry is written in English and Chinese. Diagram IDs refer to
 
 ---
 
+## v1.13 — 2026-11-25
+
+**English**
+- Section 22 table gets a **Release** column on every row: ✅ Stable, ✅ Stable · pre-1.0 (pinned), managed service, GA model, candidate (not adopted), or development / test only; a note above the table states that every component is on a stable (GA) release.
+
+**中文**
+- 第 22 节表格每一行新增 **发布类型** 一列：✅ 稳定版、✅ 稳定版 · 未到 1.0（锁定版本）、托管服务、正式发布的模型、候选（未采用），或只用于开发 / 测试；表格上方注明所有组件都使用稳定（GA）版本。
+
+---
+
 ## v1.12 — 2026-11-25
 
 **English**

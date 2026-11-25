@@ -76,7 +76,7 @@ Both channels handle five kinds of request:
 
 | Area | Requirement |
 |---|---|
-| Data residency | Customer data, recordings and transcripts stay on-prem or in a Hong Kong private cloud (PDPO, sector regulators expectations). No public LLM APIs in production. |
+| Data residency | Customer data, recordings and transcripts stay on-prem or in a Hong Kong private cloud (PDPO, sector regulators expectations). No public internet LLM APIs in production; the managed Bailian service is allowed only under the conditions in [section 19](#19-deployment-profiles-cloud-vs-on-prem). |
 | Languages | Cantonese, Mandarin and English, often code-switched within one sentence |
 | Volume | About 20k chats per day (400 concurrent at peak) and 6k calls per day (120 concurrent at peak); about 20k documents in the knowledge base |
 | Latency | Voice: roughly 1 second from end of speech to first audio. Chat: first token within 1–2 seconds |
@@ -110,7 +110,7 @@ Both channels handle five kinds of request:
 | **RAG service** | Query rewriting, hybrid search, reranking, citation verification |
 | **MCP servers** | The tool layer between the agents and the systems of record: account, case, order, change (drafts only) and identity tools. The LLM only ever sees these tools, never the raw APIs ([4.6](#46-tool-and-api-contracts)). Each server has **its own mTLS client certificate**, so the internal gateway knows which server is calling and lets it reach only its own APIs (for example, the change server can create drafts but cannot read orders). |
 | **Model gateway** | Model routing, quotas, cost attribution per channel and feature |
-| **Approval service** | Staff approvals with separation of duties; resumes paused graphs |
+| **Approval service** | Staff approvals with separation of duties; executes the approved draft itself, then notifies the session or customer |
 | **Notification service** | Post-call message to the chat thread, as a push notification, or by SMS |
 | **Data** | Postgres (checkpoints, tasks, interactions, audit index), Redis (sessions, OTP, rate limits, caches), Milvus (dense + BM25), object storage (clauses, uploads, recordings), Kafka (events) |
 | **Guardrail library** | Input and output rules shared by the runtime guardrails and the rule-eval service ([section 14](#14-guardrails)) |
@@ -140,7 +140,7 @@ Both channels handle five kinds of request:
 
 **North-south vs east-west traffic**
 - Clients come in through the **external API gateway**.
-- Our own services (orchestrator ↔ RAG ↔ MCP) talk **directly over the service mesh** (Istio or Linkerd) with automatic mTLS.
+- Our own services (orchestrator ↔ RAG ↔ MCP) talk **directly over the service mesh** (Istio or Linkerd) with automatic mTLS. Orchestrator → MCP is east-west traffic inside our namespace, so it does **not** pass the API gateway.
 - **Only calls to the client's core systems** cross a team boundary. Those go through the **client's internal API gateway**.
 - Databases are reached over their own protocols, locked down by NetworkPolicy and short-lived Vault credentials.
 
@@ -224,7 +224,7 @@ skills/
     profile_change/SKILL.md
     address_change/SKILL.md
     cancellation/SKILL.md
-      references/retention_offers.md
+      references/disclosures.md
   order_agent/
     order_lookup/SKILL.md
     returns_guide/SKILL.md
@@ -244,7 +244,7 @@ Skills belong to the **domain pack**: another industry replaces the folders, not
 | | `document_checklist` | Documents still missing for this case type, how to upload them | Model |
 | `service_agent` | `profile_change` | Contact-detail change as a draft, read-back before submitting | **Router** |
 | | `address_change` | Address change as a draft, proof-of-address rules | **Router** |
-| | `cancellation` | Mandatory disclosures, cooling-off rules, one retention offer at most, then a draft | **Router** |
+| | `cancellation` | Explain the consequences with citations (benefits lost, fees, cooling-off), create a cancellation request task, hand off. **No retention offers** (BND-SCP-07) | **Router** |
 | `order_agent` | `order_lookup` | Find the right order from vague descriptions (date, item, amount) | Model |
 | | `returns_guide` | Return eligibility and steps by product category | Model |
 | | `refund_request` | Quote → confirm → commit; above the threshold, a draft for approval | **Router** |
@@ -257,8 +257,8 @@ Skills belong to the **domain pack**: another industry replaces the folders, not
 name: cancellation
 description: Cancel a plan or account. Use when the customer asks to cancel or close.
 agent: service_agent
-version: 1.4.0
-owner: retention-team
+version: 1.5.0
+owner: servicing-team
 compliance_review: CR-2026-031
 channels: [chat, voice]
 min_assurance: verified+step_up
@@ -268,10 +268,11 @@ eval_tags: [cancellation]
 ## When to use
 ## Steps
 1. Read back the plan and contract end date.
-2. State the mandatory disclosures (references/disclosures.md).
-3. Make at most one retention offer; do not repeat it after a no.
-4. Create the cancellation draft; tell the customer it needs approval.
+2. Explain the consequences with citations: benefits lost, fees, cooling-off (references/disclosures.md).
+3. If the customer still wants to cancel, create the cancellation request task.
+4. Hand off: transfer or callback on voice, thread handover in chat.
 ## Never
+- Make a retention offer or negotiate (BND-SCP-07).
 - Promise a refund amount or a date.
 ## Hand off when
 - The customer disputes a charge, or mentions hardship.
@@ -317,6 +318,8 @@ Static content goes first and dynamic content last, so **vLLM prefix caching** c
 
 **Two layers.** Workers call **MCP tools**, which call the **internal REST APIs** of the systems of record. Raw REST APIs are never exposed to the LLM.
 
+**MCP is our adapter, not a requirement on the client.** The MCP servers are code we write that wraps the client's existing REST APIs (behind its internal API gateway) as task-shaped tools; the client changes nothing. The same tool contract can also run **in-process** as plain tool functions inside the orchestrator, which is simpler for a single application or an MVP. MCP servers pay off when several agents or AI applications reuse the tools, or when each tool family needs its own certificate and permissions. Either way, **every call to a system of record goes through the internal API gateway**.
+
 | | MCP tool (for the agent) | Internal REST API (system of record) |
 |---|---|---|
 | Granularity | Task-shaped, coarse, few fields | Resource-shaped, fine-grained |
@@ -353,7 +356,7 @@ The boundaries these tiers enforce are listed in [Appendix A.2](#a2-action-bound
 | `search_policy(query)` | T0 | RAG over return and refund terms; **not an API** |
 
 **Contract rules**
-- **Ownership on every ID** (BOLA, OWASP API1): each `order_id` is checked against the token's `sub`.
+- **Ownership on every ID** (BOLA, OWASP API1): each `order_id` is checked against the token's `customer_id` (never an ID from the model).
 - **Two-step commit for T1 writes.** The quote returns a signed `confirmation_token` (5 minutes, bound to the customer and a hash of the payload). The customer confirms explicitly (a button in chat; "yes" or DTMF 1 on voice). The commit carries only the token, so the LLM can't change parameters after confirmation.
 - **Idempotency:** every write takes `Idempotency-Key` (`task_id` + step); a replay returns the original result.
 - **Small results:** lists are paginated with a cursor and capped; each item is a summary (ID, date, amount, status, first item). Too many matches → return the count and ask the customer to narrow it down.
@@ -442,7 +445,7 @@ A **related-history lookup** runs in parallel with retrieval: same customer, int
 ![R3 Model inventory](docs/img/R3-model-inventory.png)
 *R3 · Model inventory — source: [`R3-model-inventory.drawio`](docs/diagrams/R3-model-inventory.drawio)*
 
-**All Qwen / Alibaba Tongyi.** One vendor and one licence family (Apache 2.0 for Qwen3), strong in Cantonese, Mandarin and English, one fine-tuning toolchain, and consistent with clients already on Alibaba Cloud.
+**All Qwen / Alibaba Tongyi.** One vendor and one licence family (Apache 2.0 for Qwen3), good Cantonese, Mandarin and English support (to be proven on the golden set's Cantonese and code-switched slices, not assumed), one fine-tuning toolchain, and consistent with clients already on Alibaba Cloud.
 
 | Step | Model |
 |---|---|
@@ -488,13 +491,15 @@ See [section 19](#19-deployment-profiles-cloud-vs-on-prem).
 | Sensitive data | Masked inputs | DTMF only; never in transcripts, recordings or the LLM |
 | Handoff | Chat thread to a human agent | Back to a **Genesys ACD queue** with the `handoff_id` as participant data → the agent console loads the packet ([section 13](#13-human-handoff-and-agent-console)) |
 
-**Voice latency budget (approximate):** VAD 200–300 ms · final STT 100–200 ms · routing and retrieval 150–300 ms · LLM first token 200–400 ms · first TTS audio 100–200 ms. Mitigations:
+**Voice latency budget (approximate):** VAD 200–300 ms · final STT 100–200 ms · routing and retrieval 150–300 ms · LLM first token 200–400 ms · **first-sentence check 10–150 ms** ([section 14](#14-guardrails)) · first TTS audio 100–200 ms. **That adds up to roughly 0.75–1.5 s, so the ~1 s target is not met by default**; it depends on the mitigations below. Mitigations:
 - stream every stage;
 - use 8B or MoE for simple turns;
 - prefix caching;
 - start retrieval on partial transcripts;
 - pre-synthesised fillers ("Let me check that for you");
-- voice requests get priority over chat in the model gateway.
+- voice requests get priority over chat in the model gateway;
+- the first sentence gets the deterministic rules only (≈ 10 ms); the fast 8B check runs on each later sentence while the previous one is playing;
+- for high-risk intents (eligibility, cases), a filler plays while the whole answer is verified (trade-off 2 in [section 20](#20-known-trade-offs-and-open-questions)).
 
 ---
 
@@ -539,6 +544,16 @@ See [section 19](#19-deployment-profiles-cloud-vs-on-prem).
 - `act` after token exchange.
 
 It is encoded, **not encrypted**, so no sensitive data goes into it.
+
+**Customer identifiers (used consistently in this document)**
+
+| Identifier | What it is | Where it comes from |
+|---|---|---|
+| `sub` | The IdP's subject ID for the login; may be pairwise per client | The access token. Used only to look up `customer_id` |
+| `customer_id` | The enterprise customer key (MDM). Owns tasks, long-term memory and audit records | Resolved once from `sub` by the identity-mapping service, then kept in agent state ([section 20](#20-known-trade-offs-and-open-questions), #1) |
+| `customer_no` (per system) | The ID each system of record uses (CRM, billing, orders) | Written into each exchanged token by the STS for that token's `aud` |
+
+Ownership checks always compare against the **token**, never an ID the model supplied: tools and MCP servers use `customer_id`; each system of record uses its own `customer_no` from the exchanged token.
 
 **Validation, in order** (gateway and every service):
 1. algorithm allow-list;
@@ -619,7 +634,7 @@ It is encoded, **not encrypted**, so no sensitive data goes into it.
 
 **Account change (C4).**
 1. The AI creates a **draft** with an idempotency key, and the graph pauses with `interrupt()`.
-2. The approver signs in with **staff SSO**. The approval service checks the role, that the **approver is not the drafter**, and that the draft is still valid, then resumes the graph with `Command(resume=…)`.
+2. The approver signs in with **staff SSO**. The approval service checks the role, that the **approver is not the drafter**, and that the draft is still valid, then **executes the stored draft itself** (the draft is a complete, versioned API request), so a release deployed during a multi-day pause can't break it. The paused graph is resumed with `Command(resume=…)` only to tell a still-open session the outcome; if the graph's release is gone, the customer gets a notification instead.
 3. The change is applied through the internal API gateway with a token **exchanged on behalf of the approver**, so the core system logs the real approver and enforces its own limits.
 
 **Whose token is used where.** Approval doesn't involve the customer's token at all.
@@ -628,8 +643,8 @@ It is encoded, **not encrypted**, so no sensitive data goes into it.
 |---|---|---|
 | Actor | The verified customer | The approver |
 | Token | The customer's own token, after verification and step-up | The approver's own staff SSO token |
-| Authorization | Ownership: the customer can only touch their own data (`sub`) | The approver's **role** plus **assignment** to this case |
-| Which customer's data | `sub` in the customer's token | `customer_id` stored on the **task**, not a customer token |
+| Authorization | Ownership: the customer can only touch their own data (`customer_id` resolved from the token) | The approver's **role** plus **assignment** to this case |
+| Which customer's data | `customer_id` resolved from the customer's token | `customer_id` stored on the **task**, not a customer token |
 
 - The task stores `customer_id`, `requested_by`, the request, and the **step-up evidence** (the customer's consent, captured at request time). It never stores a token.
 - When the session ends, the customer's token is deleted. Nothing later needs it.
@@ -683,7 +698,7 @@ It is encoded, **not encrypted**, so no sensitive data goes into it.
 |---|---|
 | Customer drops mid-task | Task marked interrupted, with progress saved; SMS sent with a resume path; re-verification on return |
 | Page refresh | Same session ID → reload from the checkpoint; never show half a generation |
-| Approval pause | A designed `interrupt()` that can last days; resumed by the approver |
+| Approval pause | A designed `interrupt()` that can last days; the approval service executes the stored draft, so execution doesn't depend on resuming an old graph |
 
 **Component failures** (orchestrator, voice gateway, models, tools, data stores, identity, whole site) and the degradation levels are in [Appendix B](#appendix-b-failure-modes-and-degradation).
 
@@ -704,7 +719,7 @@ Every side-effecting tool takes an **idempotency key** (`task_id` + step), so a 
 |---|---|
 | `messages`, `summary` | Last N turns verbatim; older turns folded into a summary |
 | `channel`, `language` | Voice or chat rendering; reply language |
-| `customer_id` | Set only after verification, from the token's `sub` |
+| `customer_id` | Set only after verification, resolved from the token's `sub` by the identity-mapping service ([8.2](#82-tokens)) |
 | `assurance` | Level (anonymous, verified, step-up), `verified_at`, `expires_at` |
 | `auth_ref` | Opaque pointer to the token store; never the token itself |
 | `intents`, `current_worker` | Router output (fixed enum) and the active worker |
@@ -728,7 +743,7 @@ Every side-effecting tool takes an **idempotency key** (`task_id` + step), so a 
 - **Storage:** LangGraph `PostgresStore` with pgvector. Namespaces are `("customer", customer_id, "summaries")` and `("customer", customer_id, "prefs")`.
 - **Contents:** session summaries and preferences (language, channel, contact time) only.
 - **Memory is a hint; systems of record hold the facts.** Address, balances and contract status are never memory; they are read live every time. Open work lives in the task table, not in memory.
-- **Read:** only after verification: `store.search(namespace, limit=3)` plus preferences. On voice, memory is prefetched while verification runs. **The namespace comes from the token's `sub`, never from the LLM**, so one customer's memory can't reach another.
+- **Read:** only after verification: `store.search(namespace, limit=3)` plus preferences. On voice, memory is prefetched while verification runs. **The namespace is the `customer_id` resolved from the token, never from the LLM**, so one customer's memory can't reach another.
 - **Write:** never during the conversation. A background **MemoryWriter** worker consumes `session.ended` from Kafka and:
   1. reads the interaction record (intent, outcome, task IDs);
   2. summarises it through the model gateway, with a versioned prompt and a fixed `response_format` schema;
@@ -918,7 +933,7 @@ Defence in depth: any layer can refuse, require step-up, or hand off to a human,
 
 | Layer | Checks |
 |---|---|
-| 1 · Input | Length (≤ 1,000 characters), rate limits per user and client, PII redaction before the LLM and the logs, injection classifier, uploads scanned (AV + CDR) with only the clean copy used, external text treated as data rather than instructions |
+| 1 · Input | Length (≤ 1,000 characters), rate limits per user and client, PII redacted in logs and traces; **pseudonymised for the LLM** (reversible placeholders such as `<ADDR_1>`, real values held in a per-session vault and substituted only inside tools); ID and card numbers never reach the LLM (DTMF or structured forms); injection classifier, uploads scanned (AV + CDR) with only the clean copy used, external text treated as data rather than instructions |
 | 2 · Identity and routing | Token `aud`, `scope` and `acr`; role → reachable agents; assurance level per intent (verify or step-up); tools = agent allowlist ∩ role; loop and token caps ([Appendix A](#appendix-a-system-boundaries)) |
 | 3 · Retrieval | Filters built from the token (visibility by role, clause version by contract start date, `owner_id`), never from the model |
 | 4 · Tools | Token exchange with a narrow `aud` and `scope`; ownership check plus row-level security; write tools that only create drafts; idempotency keys; quote → confirm → commit for customer-confirmed writes; human approval via `interrupt()`; refunds only to the original payment method, decided by the rules engine; never change phone or bank account |
@@ -1193,8 +1208,9 @@ Open source by default. The application depends only on standard OIDC / OAuth en
 | Prompts | `prompts/` in Git | New version per change, with **config** (model alias, temperature, `max_tokens`, `response_format`), plus a release label | Read by release label; local cache plus an image-baked fallback |
 | Models | `models.yaml` in Git (hash, quantization, LoRA lineage, licence, eval run, approval); weights in object storage | Model definitions for cost; per-version comparison | Code uses **aliases** (`chat-main`, `router`); the release bundle pins alias → version; CD deploys vLLM groups; the gateway routes |
 | Evaluators and judge prompts | `evaluators/*.yaml`, `evaluators/judges/*` | Judge prompts and evaluator configs; LLM connection to our model gateway | Rule part runs in the guardrails and the rule-eval service |
+| Skills | `skills/<agent>/<skill>/` ([4.4](#44-skills-one-folder-per-agent)) | Skill name and version recorded on each trace | Loaded from the release image; versions pinned in the release manifest |
 | Datasets | `datasets/` (golden, boundary, red-team, holdout) | Datasets for experiments | — |
-| Release | `release.yaml` (prompt, judge and model versions; retrieval config; KB snapshot; vLLM image digest) | Release label across all versions | Traces tagged with the release ID |
+| Release | `release.yaml` (prompt, skill, judge and model versions; retrieval config; KB snapshot; vLLM image digest) | Release label across all versions | Traces tagged with the release ID |
 
 **Release flow:**
 1. PR (code review plus compliance review for wording or permission changes).
@@ -1312,7 +1328,7 @@ All three are correlated by `trace_id`.
   - images re-encoded (which also strips EXIF) and PDFs disarmed;
   - only the clean copy reaches OCR or the models;
   - **never public scanners** such as VirusTotal.
-- **PII:** redacted before reaching the LLM and the logs; DTMF for identifiers; field masking per role.
+- **PII:** redacted in logs and traces; pseudonymised with reversible placeholders before the LLM, with real values substituted only inside tools (servicing such as an address change still works); ID and card numbers only by DTMF or structured forms, never through the LLM; field masking per role.
 - **Abuse:** rate limits per client and per user; alerts on OTP failures and repeated lookups across customers.
 - **Secrets:** Vault; dynamic database credentials; certificates managed by cert-manager or Vault with expiry alerts.
 - **Telephony integration:** Genesys AudioConnector signed handshake and API key; Data Action credentials stored in Genesys and rotated; idempotent handling.
@@ -1345,6 +1361,27 @@ All three are correlated by `trace_id`.
 
 This design **assumes the cloud profile keeps all data in Hong Kong**. That must be confirmed contractually for Genesys Cloud and for Alibaba Cloud services and regions.
 
+**Cloud profile and "no public LLM APIs".** Bailian is a managed service, so the cloud profile is acceptable only if all of these hold; otherwise the on-prem profile (or vLLM in the client's Alibaba Cloud Hong Kong VPC) is used:
+- Hong Kong region only, reached over a **private VPC endpoint**; egress policy allows only that endpoint ([BND-DAT-07](#a3-data-boundaries));
+- the contract states no training on customer data, retention limits and sub-processors;
+- the same model gateway, redaction and tracing apply as on-prem.
+
+### Rough GPU sizing (on-prem profile, per site)
+
+Planning numbers only; the first sprint benchmarks them on the client's hardware ([section 20](#20-known-trade-offs-and-open-questions), #3).
+
+**Assumptions at peak:** 120 concurrent calls with a turn every ~12 s (≈ 10 voice turns/s) and 400 concurrent chats with a message every ~30 s (≈ 13 chat turns/s). Per turn: one 32B answer (voice ~80 output tokens, chat ~250) and two to three 8B calls (~30 output tokens each). A large share of the prompt is a cached prefix.
+
+| Workload | Load at peak | Estimate (80 GB-class GPUs) |
+|---|---|---|
+| Qwen3-32B (FP8 or AWQ) answers | ≈ 4,000 output tokens/s, plus prefill; low time-to-first-token needed for voice, so batches stay small | 4–6 GPUs, one replica each |
+| Qwen3-8B (router, rewrite, checks, judge) | ≈ 55 requests/s, short outputs | 2 GPUs |
+| Embedding + reranker | ≈ 25 queries/s, 30 candidates each | 1 GPU (a smaller card is enough) |
+| STT + TTS (FunASR / SenseVoice, CosyVoice 2) | 120 concurrent streams each way | 6–12 GPUs; **the least certain number**, because streaming TTS capacity per card varies most |
+| **Total** | | **about 13–21 GPUs per site**, plus headroom; DR as warm standby with a smaller pool and human-handoff degradation |
+
+The cloud profile replaces most of this with Bailian usage costs; the same assumptions feed the cost model.
+
 ---
 
 ## 20. Known trade-offs and open questions
@@ -1352,8 +1389,8 @@ This design **assumes the cloud profile keeps all data in Hong Kong**. That must
 | # | Topic | Trade-off or open question | Position taken |
 |---|---|---|---|
 | ⭐ 1 | **⭐ User IDs differ across systems** | **The OIDC `sub` (possibly pairwise per client) is not the ID each subsystem uses: CRM, billing, orders and legacy cores each have their own user or account IDs, often one-to-many. This design assumes a shared `customer_no`, which often doesn't hold.** | **Anchor on an enterprise `customer_id` (MDM), linked to `sub` once. An identity-mapping service keeps the cross-reference. The STS writes the target system's ID into each exchanged token per `aud`; legacy systems without OAuth get it via the internal gateway (`X-On-Behalf-Of`). IDs never come from the LLM. No mapping → fail closed and hand off. To be validated with the client's IAM and MDM teams in week one.** |
-| 2 | Voice latency vs verification | Answers must pass citation and compliance checks, but voice streams sentence by sentence. Once spoken, a sentence can't be retracted. | Per-sentence checks (rules + fast 8B) before each sentence is synthesised. For high-risk intents (eligibility, cases), play a short filler and verify the full answer first. Latency is traded for safety where it matters. |
-| 3 | Planning numbers | Latency budget, GPU sizing and volumes are estimates | First sprint benchmarks speech, vLLM and retrieval on the client's hardware or region and resizes |
+| 2 | Voice latency vs verification | Answers must pass citation and compliance checks, but voice streams sentence by sentence. Once spoken, a sentence can't be retracted. | First sentence: deterministic rules only; each later sentence: rules + fast 8B while the previous one plays. For high-risk intents (eligibility, cases), play a short filler and verify the full answer first. Latency is traded for safety where it matters. |
+| 3 | Planning numbers | Latency budget, GPU sizing ([section 19](#rough-gpu-sizing-on-prem-profile-per-site)) and volumes are estimates | First sprint benchmarks speech, vLLM and retrieval on the client's hardware or region and resizes |
 | 4 | Cantonese speech quality | Paraformer, SenseVoice and CosyVoice on domain terms, accents and code-switching are unproven for this domain | Launch chat first; gate voice on CER measured with anonymised real recordings; hotword lists |
 | 5 | Telephony integration | Bot integration capabilities differ between Genesys Cloud (AudioConnector) and Engage | Voice gateway behind an adapter; validate the exact integration in a Genesys test org |
 | 6 | IdP capabilities | Token exchange and CIBA are not supported everywhere | Fallback: an internal token service issuing short-lived JWTs, validated via JWKS |
@@ -1501,10 +1538,10 @@ Tiers T0–T3 are defined in [section 4.6](#46-tool-and-api-contracts).
 | BND-DAT-01 | **No personal data before verification** | Permission layer; trace rule | Verify or step-up | Pre-verification lookups; yes/no probing ("is my balance above 1,000?") |
 | BND-DAT-02 | Only the caller's own data; ownership checked on every ID (BOLA) | STS / gateway / row-level security | Generic refusal | Other customers' order IDs; enumeration |
 | BND-DAT-03 | Partners see only their own book, with masked fields | Row-level security + masking | Masked or refused | Querying another agent's clients |
-| BND-DAT-04 | PII never reaches the LLM, logs or traces in clear; full ID or card numbers are never spoken or displayed | Redaction; output PII check | Redacted or dropped | "Repeat my HKID", exfiltration through formatting or spelling |
+| BND-DAT-04 | PII never reaches the LLM, logs or traces in clear (the LLM sees placeholders; tools substitute real values); full ID or card numbers are never spoken or displayed | Redaction; output PII check | Redacted or dropped | "Repeat my HKID", exfiltration through formatting or spelling |
 | BND-DAT-05 | System prompt, internal guidelines and other customers' memories are never disclosed | Output guard; RAG visibility filters | Refuse | Prompt extraction; "what did the last caller ask?" |
 | BND-DAT-06 | Long-term memory is read only from the caller's namespace, taken from the token | `Store` namespace | — | Memory bleed between customers |
-| BND-DAT-07 | Data stays in Hong Kong or on-prem; no public LLM APIs | Egress network policy; model gateway | Blocked | Config audit; egress tests |
+| BND-DAT-07 | Data stays in Hong Kong or on-prem; no public internet LLM APIs (Bailian only via a private Hong Kong endpoint, [section 19](#19-deployment-profiles-cloud-vs-on-prem)) | Egress network policy; model gateway | Blocked | Config audit; egress tests |
 | BND-DAT-08 | Agents see customer data only for interactions assigned to them; access is revoked 30 min after wrap-up | Console BFF + Genesys assignment | Refused; audited | Opening an unassigned customer; access after wrap-up |
 
 ### A.4 Identity and trust boundaries

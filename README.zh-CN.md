@@ -78,7 +78,7 @@
 
 | 方面 | 要求 |
 |---|---|
-| 数据驻留 | 客户数据、录音和转写文本留在本地或香港私有云（PDPO、行业监管要求）。生产环境不使用公网 LLM API。 |
+| 数据驻留 | 客户数据、录音和转写文本留在本地或香港私有云（PDPO、行业监管要求）。生产环境不使用公网 LLM API；托管的百炼服务只有满足[第 19 节](#19-部署形态云上与本地)的条件才可使用。 |
 | 语言 | 粤语、普通话和英语，经常在一句话里混用 |
 | 业务量 | 每天约 2 万次聊天（峰值并发 400），每天约 6 千通电话（峰值并发 120）；知识库约 2 万份文档 |
 | 延迟 | 语音：从用户说完到第一段语音约 1 秒。聊天：1–2 秒内出第一个 token |
@@ -112,7 +112,7 @@
 | **RAG 服务** | 查询改写、混合检索、重排、引用校验 |
 | **MCP server** | Agent 和业务系统之间的工具层：账户、工单、订单、变更（仅草稿）和身份工具。LLM 只能看到这些工具，永远看不到原始 API（[4.6](#46-tool-与-api-契约)）。每个 server 有 **自己的 mTLS 客户端证书**，内部网关因此知道是哪个 server 在调用，只允许它访问自己的 API（例如变更 server 能建草稿，但不能读订单）。 |
 | **模型网关** | 模型路由、配额、按渠道和功能统计成本 |
-| **审批服务** | 员工审批，职责分离；恢复暂停中的 graph |
+| **审批服务** | 员工审批，职责分离；自己执行已批准的草稿，再通知会话或客户 |
 | **通知服务** | 通话后发消息到聊天线程、推送通知或短信 |
 | **数据** | Postgres（checkpoint、任务、交互记录、审计索引）、Redis（会话、OTP、限流、缓存）、Milvus（向量 + BM25）、对象存储（条款、上传文件、录音）、Kafka（事件） |
 | **护栏库** | 运行时护栏与 rule-eval 服务共用的输入和输出规则（[第 14 节](#14-护栏-guardrails)） |
@@ -142,7 +142,7 @@
 
 **南北向 vs 东西向流量**
 - 客户端通过 **外部 API 网关** 进来。
-- 我们自己的服务之间（编排器 ↔ RAG ↔ MCP）**直接走 service mesh**（Istio 或 Linkerd），自动 mTLS。
+- 我们自己的服务之间（编排器 ↔ RAG ↔ MCP）**直接走 service mesh**（Istio 或 Linkerd），自动 mTLS。编排器 → MCP 是我们命名空间内的东西向流量，所以 **不经过** API 网关。
 - **只有调用客户核心系统** 时才跨越团队边界，这些调用走 **客户的内部 API 网关**。
 - 数据库用各自的协议访问，用 NetworkPolicy 和 Vault 签发的短期凭证锁死。
 
@@ -226,7 +226,7 @@ skills/
     profile_change/SKILL.md
     address_change/SKILL.md
     cancellation/SKILL.md
-      references/retention_offers.md
+      references/disclosures.md
   order_agent/
     order_lookup/SKILL.md
     returns_guide/SKILL.md
@@ -246,7 +246,7 @@ Skill 属于 **行业包**：换一个行业时替换这些文件夹，核心不
 | | `document_checklist` | 这类工单还缺哪些文件、怎么上传 | 模型 |
 | `service_agent` | `profile_change` | 联系方式变更做成草稿，提交前复述确认 | **路由器** |
 | | `address_change` | 地址变更做成草稿，地址证明的要求 | **路由器** |
-| | `cancellation` | 必须告知的事项、冷静期规则、最多一次挽留，然后生成草稿 | **路由器** |
+| | `cancellation` | 引用条款解释后果（失去的权益、费用、冷静期），建取消请求任务，转人工。**不做挽留**（BND-SCP-07） | **路由器** |
 | `order_agent` | `order_lookup` | 根据模糊描述（日期、商品、金额）找到正确的订单 | 模型 |
 | | `returns_guide` | 按商品类别说明退货条件和步骤 | 模型 |
 | | `refund_request` | 报价 → 确认 → 提交；超过阈值则生成草稿等待审批 | **路由器** |
@@ -259,8 +259,8 @@ Skill 属于 **行业包**：换一个行业时替换这些文件夹，核心不
 name: cancellation
 description: Cancel a plan or account. Use when the customer asks to cancel or close.
 agent: service_agent
-version: 1.4.0
-owner: retention-team
+version: 1.5.0
+owner: servicing-team
 compliance_review: CR-2026-031
 channels: [chat, voice]
 min_assurance: verified+step_up
@@ -270,10 +270,11 @@ eval_tags: [cancellation]
 ## When to use
 ## Steps
 1. Read back the plan and contract end date.
-2. State the mandatory disclosures (references/disclosures.md).
-3. Make at most one retention offer; do not repeat it after a no.
-4. Create the cancellation draft; tell the customer it needs approval.
+2. Explain the consequences with citations: benefits lost, fees, cooling-off (references/disclosures.md).
+3. If the customer still wants to cancel, create the cancellation request task.
+4. Hand off: transfer or callback on voice, thread handover in chat.
 ## Never
+- Make a retention offer or negotiate (BND-SCP-07).
 - Promise a refund amount or a date.
 ## Hand off when
 - The customer disputes a charge, or mentions hardship.
@@ -319,6 +320,8 @@ eval_tags: [cancellation]
 
 **分两层。** Worker 调用 **MCP 工具**，MCP 工具再调用业务系统的 **内部 REST API**。原始 REST API 永远不直接暴露给 LLM。
 
+**MCP 是我们自己的适配层，不是对客户的要求。** MCP server 是我们写的代码：把客户现有的 REST API（在其内部 API 网关后面）包装成按任务设计的工具，客户那边什么都不用改。同一套工具契约也可以 **在进程内** 以普通工具函数的形式跑在 orchestrator 里，单个应用或 MVP 用这种方式更简单。当多个 agent 或多个 AI 应用要复用工具，或者每类工具需要自己的证书和权限时，MCP server 才更划算。不管哪种方式，**调用业务系统都一定经过内部 API 网关**。
+
 | | MCP 工具（给 agent 用） | 内部 REST API（业务系统） |
 |---|---|---|
 | 粒度 | 按任务设计，粗粒度，字段少 | 按资源设计，细粒度 |
@@ -355,7 +358,7 @@ eval_tags: [cancellation]
 | `search_policy(query)` | T0 | 对退货和退款条款做 RAG；**不是 API** |
 
 **契约规则**
-- **每个 ID 都校验归属**（BOLA，OWASP API1）：每个 `order_id` 都要和 token 的 `sub` 对比。
+- **每个 ID 都校验归属**（BOLA，OWASP API1）：每个 `order_id` 都要和 token 对应的 `customer_id` 对比（从不使用模型给的 ID）。
 - **T1 写操作两步提交。** Quote 返回一个签名的 `confirmation_token`（5 分钟有效，绑定客户和请求内容的 hash）。客户明确确认（聊天里点按钮；语音里说"是"或按 1）。Commit 只带这个 token，所以客户确认之后 LLM 改不了任何参数。
 - **幂等：** 每个写操作都带 `Idempotency-Key`（`task_id` + 步骤）；重放时返回原来的结果。
 - **结果要小：** 列表用 cursor 分页并设上限；每条只返回摘要（ID、日期、金额、状态、首个商品）。匹配太多 → 返回数量，请客户缩小范围。
@@ -443,7 +446,7 @@ refund:
 ![R3 Model inventory](docs/img/R3-model-inventory.png)
 *R3 · 模型清单 —— 源文件：[`R3-model-inventory.drawio`](docs/diagrams/R3-model-inventory.drawio)*
 
-**全部使用 Qwen / 阿里通义。** 一家供应商、一个许可证系列（Qwen3 为 Apache 2.0），粤语、普通话和英语都强，一套微调工具链，也和已经在用阿里云的客户保持一致。
+**全部使用 Qwen / 阿里通义。** 一家供应商、一个许可证系列（Qwen3 为 Apache 2.0），对粤语、普通话和英语支持良好（要用 golden set 里粤语和多语混杂的切片证明，不能想当然），一套微调工具链，也和已经在用阿里云的客户保持一致。
 
 | 环节 | 模型 |
 |---|---|
@@ -489,13 +492,15 @@ refund:
 | 敏感数据 | 输入框打码 | 只用 DTMF；永不进入转写、录音或 LLM |
 | 转人工 | 聊天线程转给人工坐席 | 回到 **Genesys ACD 队列**，participant data 带 `handoff_id` → 坐席控制台加载交接包（[第 13 节](#13-转人工与坐席控制台)） |
 
-**语音延迟预算（大致）：** VAD 200–300 ms · STT 最终结果 100–200 ms · 路由与检索 150–300 ms · LLM 首 token 200–400 ms · TTS 首段音频 100–200 ms。缓解手段：
+**语音延迟预算（大致）：** VAD 200–300 ms · STT 最终结果 100–200 ms · 路由与检索 150–300 ms · LLM 首 token 200–400 ms · **首句检查 10–150 ms**（[第 14 节](#14-护栏-guardrails)） · TTS 首段音频 100–200 ms。**加起来约 0.75–1.5 秒，默认达不到约 1 秒的目标**，要靠下面的缓解手段。缓解手段：
 - 每个环节都流式；
 - 简单轮次用 8B 或 MoE；
 - prefix caching；
 - 基于部分转写就开始检索；
 - 预合成的过渡语（"我帮您查一下"）；
-- 在模型网关里语音请求优先于聊天。
+- 在模型网关里语音请求优先于聊天；
+- 首句只跑确定性规则（约 10 ms）；之后每句在上一句播放的同时跑快速 8B 检查；
+- 高风险意图（资格、工单）先播过渡语，同时校验完整回答（[第 20 节](#20-已知取舍与待定问题)第 2 条取舍）。
 
 ---
 
@@ -540,6 +545,16 @@ refund:
 - token exchange 之后的 `act`。
 
 它只是编码，**没有加密**，所以不放任何敏感数据。
+
+**客户标识（全文统一用法）**
+
+| 标识 | 含义 | 来源 |
+|---|---|---|
+| `sub` | IdP 给这次登录的主体 ID；可能按 client 是 pairwise 的 | Access token。只用来查找 `customer_id` |
+| `customer_id` | 企业统一的客户主键（MDM）。任务、长期记忆和审计记录都挂在它上面 | 由身份映射服务从 `sub` 解析一次，然后存在 agent 状态里（[第 20 节](#20-已知取舍与待定问题)第 1 条） |
+| `customer_no`（各系统） | 每个业务系统自己用的 ID（CRM、计费、订单） | STS 换 token 时按该 token 的 `aud` 写入 |
+
+归属检查永远以 **token** 为准，从不使用模型给的 ID：工具和 MCP server 用 `customer_id`；每个业务系统用换发 token 里自己的 `customer_no`。
 
 **校验顺序**（网关和每个服务）：
 1. 算法白名单；
@@ -620,7 +635,7 @@ refund:
 
 **账户变更（C4）。**
 1. AI 用幂等 key 创建一个 **草稿**，graph 用 `interrupt()` 暂停。
-2. 审批人用 **员工 SSO** 登录。审批服务检查角色、**审批人不是起草人**、草稿仍然有效，然后用 `Command(resume=…)` 恢复 graph。
+2. 审批人用 **员工 SSO** 登录。审批服务检查角色、**审批人不是起草人**、草稿仍然有效，然后 **由审批服务直接执行存好的草稿**（草稿是一个完整、带版本的 API 请求），所以暂停几天期间即使部署了新版本也不会出问题。只有当会话还开着时，才用 `Command(resume=…)` 恢复 graph 告诉客户结果；如果该 graph 的版本已经下线，就改为给客户发通知。
 3. 变更通过内部 API 网关执行，使用 **代表审批人换取** 的 token，这样核心系统记录的是真实的审批人，并执行它自己的限额。
 
 **哪一步用谁的 token。** 审批和客户的 token 完全无关。
@@ -629,8 +644,8 @@ refund:
 |---|---|---|
 | 操作人 | 已核验的客户 | 审批人 |
 | Token | 客户自己的 token（核验和 step-up 之后） | 审批人自己的员工 SSO token |
-| 授权依据 | 归属：客户只能动自己的数据（`sub`） | 审批人的 **角色** 加对该工单的 **分配** |
-| 操作哪个客户的数据 | 客户 token 里的 `sub` | 存在 **任务** 上的 `customer_id`，不是客户 token |
+| 授权依据 | 归属：客户只能动自己的数据（从 token 解析出的 `customer_id`） | 审批人的 **角色** 加对该工单的 **分配** |
+| 操作哪个客户的数据 | 从客户 token 解析出的 `customer_id` | 存在 **任务** 上的 `customer_id`，不是客户 token |
 
 - 任务存 `customer_id`、`requested_by`、申请内容和 **step-up 证据**（客户在申请时给出的同意）。任务永远不存 token。
 - 会话结束时，客户的 token 被删除。之后没有任何环节需要它。
@@ -684,7 +699,7 @@ refund:
 |---|---|
 | 客户在任务中途掉线 | 任务标记为中断并保存进度；发短信告知恢复途径；回来时重新核验 |
 | 页面刷新 | 同一个会话 ID → 从 checkpoint 重新加载；永不显示生成了一半的内容 |
-| 审批暂停 | 设计好的 `interrupt()`，可以持续数天；由审批人恢复 |
+| 审批暂停 | 设计好的 `interrupt()`，可以持续数天；由审批服务执行存好的草稿，执行不依赖恢复旧的 graph |
 
 **组件故障**（编排器、语音网关、模型、工具、数据存储、身份、整个站点）和降级等级见[附录 B](#附录-b-故障模式与降级)。
 
@@ -705,7 +720,7 @@ refund:
 |---|---|
 | `messages`、`summary` | 最近 N 轮原文；更早的轮次折叠成摘要 |
 | `channel`、`language` | 按语音或聊天呈现；回复语言 |
-| `customer_id` | 核验通过后才设置，取自 token 的 `sub` |
+| `customer_id` | 核验通过后才设置，由身份映射服务从 token 的 `sub` 解析（[8.2](#82-token)） |
 | `assurance` | 等级（匿名、已核验、step-up）、`verified_at`、`expires_at` |
 | `auth_ref` | 指向 token store 的不透明引用；从不是 token 本身 |
 | `intents`、`current_worker` | 路由输出（固定枚举）和当前 worker |
@@ -729,7 +744,7 @@ refund:
 - **存储：** LangGraph `PostgresStore` 加 pgvector。命名空间是 `("customer", customer_id, "summaries")` 和 `("customer", customer_id, "prefs")`。
 - **内容：** 只有会话摘要和偏好（语言、渠道、联系时间）。
 - **记忆只是提示，事实以业务系统为准。** 地址、余额和合同状态从不作为记忆，每次都实时读取。未完成的事放在任务表里，不放在记忆里。
-- **读取：** 只在核验之后：`store.search(namespace, limit=3)` 加偏好。语音场景在核验进行的同时预取记忆。**命名空间取自 token 的 `sub`，从不由 LLM 决定**，所以一个客户的记忆不会串到另一个客户。
+- **读取：** 只在核验之后：`store.search(namespace, limit=3)` 加偏好。语音场景在核验进行的同时预取记忆。**命名空间是从 token 解析出的 `customer_id`，从不由 LLM 决定**，所以一个客户的记忆不会串到另一个客户。
 - **写入：** 对话进行中从不写。后台的 **MemoryWriter** worker 消费 Kafka 的 `session.ended`，然后：
   1. 读取交互记录（意图、结果、任务 ID）；
   2. 经模型网关生成摘要，prompt 有版本，`response_format` 用固定 schema；
@@ -919,7 +934,7 @@ LangMem 还会自己发起 LLM 调用，这会绕过模型网关、prompt 版本
 
 | 层 | 检查内容 |
 |---|---|
-| 1 · 输入 | 长度（≤ 1,000 字符）、按用户和客户端限流、进入 LLM 和日志前做 PII 脱敏、注入分类器、上传文件扫描（AV + CDR）且只使用净化后的副本、外部文本视为数据而非指令 |
+| 1 · 输入 | 长度（≤ 1,000 字符）、按用户和客户端限流、日志和 trace 中的 PII 脱敏；**进入 LLM 前做假名化**（可还原的占位符，例如 `<ADDR_1>`，真实值存在会话级保险库里，只在工具内部替换回去）；证件号和卡号永不进入 LLM（用 DTMF 或结构化表单）；注入分类器、上传文件扫描（AV + CDR）且只使用净化后的副本、外部文本视为数据而非指令 |
 | 2 · 身份与路由 | Token 的 `aud`、`scope` 和 `acr`；角色 → 可达的 agent；每个意图的认证等级（核验或 step-up）；工具 = agent 白名单 ∩ 角色；循环与 token 上限（[附录 A](#附录-a-系统边界)） |
 | 3 · 检索 | 过滤条件根据 token 构建（按角色的可见性、按合同起始日的条款版本、`owner_id`），从不由模型决定 |
 | 4 · 工具 | 用窄 `aud` 和 `scope` 做 token exchange；归属检查加行级安全；写工具只生成草稿；幂等 key；客户确认类写操作走 quote → 确认 → commit；通过 `interrupt()` 人工审批；退款只退回原支付方式，由规则引擎决定；永不修改手机号或银行账户 |
@@ -1194,8 +1209,9 @@ owner: compliance
 | Prompt | Git 里的 `prompts/` | 每次修改一个新版本，带 **config**（模型别名、temperature、`max_tokens`、`response_format`），加发布标签 | 按发布标签读取；本地缓存加打进镜像的兜底版本 |
 | 模型 | Git 里的 `models.yaml`（hash、量化方式、LoRA 来源、许可证、评估记录、审批）；权重在对象存储 | 用于计费的模型定义；按版本比较 | 代码使用 **别名**（`chat-main`、`router`）；发布包锁定别名 → 版本；CD 部署 vLLM 组；网关负责路由 |
 | Evaluator 和 judge prompt | `evaluators/*.yaml`、`evaluators/judges/*` | Judge prompt 和 evaluator 配置；LLM 连接指向我们的模型网关 | 规则部分在护栏和 rule-eval 服务里运行 |
+| Skill | `skills/<agent>/<skill>/`（[4.4](#44-skills每个-agent-一个文件夹)） | 每条 trace 记录 skill 名称和版本 | 从发布镜像加载；版本锁定在发布清单里 |
 | 数据集 | `datasets/`（golden、边界、红队、holdout） | 用于实验的数据集 | — |
-| 发布 | `release.yaml`（prompt、judge 和模型版本；检索配置；知识库快照；vLLM 镜像 digest） | 所有版本上的发布标签 | Trace 带发布 ID |
+| 发布 | `release.yaml`（prompt、skill、judge 和模型版本；检索配置；知识库快照；vLLM 镜像 digest） | 所有版本上的发布标签 | Trace 带发布 ID |
 
 **发布流程：**
 1. PR（代码评审，措辞或权限变更还要合规评审）。
@@ -1313,7 +1329,7 @@ owner: compliance
   - 图片重新编码（顺带去掉 EXIF），PDF 做净化；
   - 只有净化后的副本才会进入 OCR 或模型；
   - **永不使用 VirusTotal 等公共扫描服务**。
-- **PII：** 进入 LLM 和日志前脱敏；证件号等用 DTMF；按角色打码字段。
+- **PII：** 日志和 trace 中脱敏；进入 LLM 前用可还原的占位符做假名化，真实值只在工具内部替换回去（所以改地址这类服务仍然能做）；证件号和卡号只通过 DTMF 或结构化表单，从不经过 LLM；按角色打码字段。
 - **滥用：** 按客户端和用户限流；OTP 失败和跨客户重复查询会触发告警。
 - **密钥：** Vault；数据库动态凭证；证书由 cert-manager 或 Vault 管理并有过期告警。
 - **电话系统集成：** Genesys AudioConnector 签名握手和 API key；Data Action 凭证存在 Genesys 里并定期轮换；处理保持幂等。
@@ -1346,6 +1362,27 @@ owner: compliance
 
 本设计 **假设云上形态的所有数据都留在香港**。这一点必须在合同中与 Genesys Cloud 及阿里云的服务和 region 逐一确认。
 
+**云上形态与"不使用公网 LLM API"。** 百炼是托管服务，所以只有同时满足以下条件，才能用云上形态；否则用本地形态（或客户阿里云香港 VPC 内的 vLLM）：
+- 只用香港 region，通过 **VPC 私网终端节点** 访问；出口策略只放行这个终端节点（[BND-DAT-07](#a3-数据边界)）；
+- 合同写明不用客户数据训练、保留期限和分包商；
+- 和本地形态一样，经过同一个模型网关、同样的脱敏和 trace。
+
+### GPU 规模粗估（本地形态，每个站点）
+
+只是规划用的数字；第一个 sprint 会在客户的硬件上实测（[第 20 节](#20-已知取舍与待定问题)第 3 条）。
+
+**峰值假设：** 120 路并发通话，约每 12 秒一轮（≈ 每秒 10 个语音轮次）；400 个并发聊天，约每 30 秒一条消息（≈ 每秒 13 个聊天轮次）。每一轮：一次 32B 回答（语音约 80 个输出 token，聊天约 250 个），加两到三次 8B 调用（每次约 30 个输出 token）。Prompt 中很大一部分是可缓存的前缀。
+
+| 负载 | 峰值负载 | 估算（80 GB 级 GPU） |
+|---|---|---|
+| Qwen3-32B（FP8 或 AWQ）回答 | ≈ 每秒 4,000 个输出 token，加 prefill；语音需要很低的首 token 延迟，所以批量不能大 | 4–6 张卡，每张一个副本 |
+| Qwen3-8B（路由、改写、校验、judge） | ≈ 每秒 55 个请求，输出很短 | 2 张卡 |
+| Embedding + 重排 | ≈ 每秒 25 次查询，每次 30 个候选 | 1 张卡（小一点的卡就够） |
+| STT + TTS（FunASR / SenseVoice、CosyVoice 2） | 双向各 120 路并发流 | 6–12 张卡；**最不确定的数字**，因为流式 TTS 每张卡能承载多少路差异最大 |
+| **合计** | | **每个站点约 13–21 张卡**，另加余量；灾备用规模较小的温备，降级时转人工 |
+
+云上形态把大部分换成百炼的按量费用；同样的假设也用于成本模型。
+
 ---
 
 ## 20. 已知取舍与待定问题
@@ -1353,8 +1390,8 @@ owner: compliance
 | # | 主题 | 取舍或待定问题 | 采取的立场 |
 |---|---|---|---|
 | ⭐ 1 | **⭐ 各子系统的用户 ID 不一致** | **OIDC 的 `sub`（可能按 client 是 pairwise 的）并不是各子系统使用的 ID：CRM、计费、订单和老旧核心系统各有自己的用户或账户 ID，而且经常是一对多。本设计默认大家共用同一个 `customer_no`，实际往往不成立。** | **以企业统一的 `customer_id`（MDM）为锚，与 `sub` 关联一次。由身份映射服务维护对照表。STS 在换 token 时按目标 `aud` 写入该系统自己的 ID；不支持 OAuth 的老旧系统由内部网关翻译（`X-On-Behalf-Of`）。ID 永远不来自 LLM。找不到对应关系 → fail closed 并转人工。第一周就要和客户的 IAM 和 MDM 团队确认。** |
-| 2 | 语音延迟 vs 校验 | 回答必须通过引用和合规检查，但语音是逐句流式输出的。一句话说出去就收不回来。 | 每句话合成语音前做逐句检查（规则 + 快速 8B）。对高风险意图（资格、工单），先播一句过渡语，校验完整回答后再说。在关键的地方用延迟换安全。 |
-| 3 | 规划数字 | 延迟预算、GPU 规模和业务量都是估算 | 第一个 sprint 在客户的硬件或 region 上对语音、vLLM 和检索做基准测试，再调整规模 |
+| 2 | 语音延迟 vs 校验 | 回答必须通过引用和合规检查，但语音是逐句流式输出的。一句话说出去就收不回来。 | 首句只跑确定性规则；之后每句在上一句播放时跑规则 + 快速 8B 检查。对高风险意图（资格、工单），先播一句过渡语，校验完整回答后再说。在关键的地方用延迟换安全。 |
+| 3 | 规划数字 | 延迟预算、GPU 规模（[第 19 节](#gpu-规模粗估本地形态每个站点)）和业务量都是估算 | 第一个 sprint 在客户的硬件或 region 上对语音、vLLM 和检索做基准测试，再调整规模 |
 | 4 | 粤语语音质量 | Paraformer、SenseVoice 和 CosyVoice 在行业术语、口音和中英夹杂上的表现，在本领域还没有验证 | 先上线聊天；语音以匿名化真实录音测得的字错率为闸门；热词表 |
 | 5 | 电话系统集成 | Genesys Cloud（AudioConnector）和 Engage 的机器人集成能力不同 | 语音网关做在适配层后面；在 Genesys 测试组织里验证具体的集成方式 |
 | 6 | IdP 能力 | 不是所有 IdP 都支持 token exchange 和 CIBA | 兜底方案：内部 token 服务签发短期 JWT，通过 JWKS 校验 |
@@ -1502,10 +1539,10 @@ T0–T3 分级见[第 4.6 节](#46-tool-与-api-契约)。
 | BND-DAT-01 | **核验前不涉及任何个人数据** | 权限层；trace 规则 | 核验或 step-up | 核验前查询；是非题试探（"我的余额超过 1,000 吗？"） |
 | BND-DAT-02 | 只能访问来电者自己的数据；每个 ID 都校验归属（BOLA） | STS / 网关 / 行级安全 | 通用拒绝 | 别人的订单号；枚举 |
 | BND-DAT-03 | 合作方只能看自己名下的客户，字段打码 | 行级安全 + 打码 | 打码或拒绝 | 查询其他代理人的客户 |
-| BND-DAT-04 | PII 永不以明文进入 LLM、日志或 trace；完整证件号或卡号永不说出或显示 | 脱敏；输出 PII 检查 | 脱敏或删除 | "复述我的 HKID"、借格式或拼写外泄 |
+| BND-DAT-04 | PII 永不以明文进入 LLM、日志或 trace（LLM 只看到占位符，由工具替换真实值）；完整证件号或卡号永不说出或显示 | 脱敏；输出 PII 检查 | 脱敏或删除 | "复述我的 HKID"、借格式或拼写外泄 |
 | BND-DAT-05 | 永不泄露 system prompt、内部指引或其他客户的记忆 | 输出护栏；RAG 可见性过滤 | 拒绝 | 套取 prompt；"上一个来电的人问了什么？" |
 | BND-DAT-06 | 长期记忆只从来电者自己的命名空间读取，命名空间取自 token | `Store` 命名空间 | — | 客户之间的记忆串扰 |
-| BND-DAT-07 | 数据留在香港或本地；不使用公网 LLM API | 出口网络策略；模型网关 | 阻断 | 配置审计；出口测试 |
+| BND-DAT-07 | 数据留在香港或本地；不使用公网 LLM API（百炼只能通过香港私网终端节点访问，见[第 19 节](#19-部署形态云上与本地)） | 出口网络策略；模型网关 | 阻断 | 配置审计；出口测试 |
 | BND-DAT-08 | 坐席只能看分配给自己的交互中的客户数据；收尾后 30 分钟收回 | 控制台 BFF + Genesys 分配关系 | 拒绝；审计 | 打开未分配的客户；收尾后继续访问 |
 
 ### A.4 身份与信任边界

@@ -8,6 +8,36 @@ Newest first. Each entry is written in English and Chinese. Diagram IDs refer to
 
 ---
 
+## v1.11 — 2026-11-25
+
+Fixes from a full review of the document.
+
+**English**
+- **Cancellation skill** now matches C3 and BND-SCP-07: explain consequences with citations, create a cancellation request, hand off. No retention offers by the AI.
+- **"No public LLM APIs" vs Bailian:** section 1 and BND-DAT-07 now say no public internet LLM APIs; section 19 lists the conditions for using Bailian (Hong Kong region, private VPC endpoint, egress allow-list, no-training contract), otherwise on-prem.
+- **Customer identifiers:** new table in 8.2 defines `sub`, `customer_id` (MDM key) and per-system `customer_no`; ownership checks, task, state and memory references now use them consistently.
+- **PII and the LLM:** redaction applies to logs and traces; the LLM gets reversible placeholders, tools substitute real values, ID and card numbers never reach the LLM. Updated in section 14, section 18, BND-DAT-04 and diagram G1.
+- **Skills in LLMOps:** section 16 lists skills as an artifact; `release.yaml` pins skill versions.
+- **Approval after a long pause:** the approval service executes the stored draft itself, so a release deployed during the pause can't break it; the graph is resumed only to tell an open session. Updated in sections 2, 9, 10 and diagrams A2 and C4.
+- **Voice latency budget** now includes the first-sentence check and states that ~1 s needs the mitigations; trade-off 2 aligned.
+- **MCP is our adapter:** 4.6 explains that MCP servers wrap the client's existing APIs, can also run in-process, and that every call to a system of record goes through the internal API gateway; section 3 notes that orchestrator → MCP is east-west and doesn't pass the gateway.
+- **Rough GPU sizing** added to section 19 (about 13–21 GPUs per site, assumptions stated; speech is the least certain).
+- Model claim on Cantonese now has to be proven on the golden set's Cantonese and code-switched slices.
+
+**中文**
+- **取消 skill** 与 C3 和 BND-SCP-07 保持一致：引用条款解释后果、建取消请求、转人工。AI 不做挽留。
+- **"不用公网 LLM API"与百炼：** 第 1 节和 BND-DAT-07 改为不使用公网 LLM API；第 19 节列出使用百炼的条件（香港 region、VPC 私网终端节点、出口白名单、合同不允许用于训练），否则用本地形态。
+- **客户标识：** 8.2 新增表格，定义 `sub`、`customer_id`（MDM 主键）和各系统的 `customer_no`；归属检查、任务、状态和记忆的引用统一按此使用。
+- **PII 与 LLM：** 日志和 trace 中脱敏；LLM 只看到可还原的占位符，由工具替换真实值；证件号和卡号永不进入 LLM。第 14 节、第 18 节、BND-DAT-04 和 G1 图同步更新。
+- **LLMOps 中的 skill：** 第 16 节把 skill 列为工件；`release.yaml` 锁定 skill 版本。
+- **长时间暂停后的审批：** 由审批服务直接执行存好的草稿，暂停期间部署了新版本也不会出问题；只有会话还开着时才恢复 graph 通知客户。第 2、9、10 节和 A2、C4 图同步更新。
+- **语音延迟预算** 加入首句检查，并说明约 1 秒的目标要靠缓解手段；第 2 条取舍同步。
+- **MCP 是我们的适配层：** 4.6 说明 MCP server 包装客户现有的 API，也可以在进程内运行，且调用业务系统一定经过内部 API 网关；第 3 节说明编排器 → MCP 是东西向流量，不经过网关。
+- 第 19 节新增 **GPU 规模粗估**（每个站点约 13–21 张卡，列出假设；语音部分最不确定）。
+- 关于粤语能力的说法，要求用 golden set 中粤语和多语混杂的切片证明。
+
+---
+
 ## v1.10 — 2026-11-25
 
 **English**

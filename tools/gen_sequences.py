@@ -327,6 +327,38 @@ s.frame("alt  score ≤ 2 or not resolved", "c", "cs", f, s.y + 20); s.y += 30
 s.note_over("c", "cs", "Survey response rates are 10–20%: always read alongside implicit signals on 100% of sessions — handoff rate, repeat contact within 7 days, abandonment, judge-scored sentiment", zone="obs")
 save(s, "C7-csat.drawio")
 
+# ---------------- C8 Human handoff ----------------
+s = Sequence("C8 Handoff", [("c", "Customer", "client"), ("or", "Orchestrator<br>(LangGraph)", "core"), ("hs", "Handoff service<br>(Postgres)", "core"),
+                             ("gx", "Genesys<br>(ACD · messaging)", "ext"), ("ac", "Agent console<br>(agent desktop)", "client"),
+                             ("bff", "Console BFF<br>(staff SSO)", "edge"), ("sor", "CRM · tasks ·<br>annotation queue", "data")])
+s.text("C8 · Human handoff — context packet, routing, agent console, wrap-up", 40, 10, 1100, 30, 16, True)
+s.msg("c", "or", "\"I want to talk to a person\"  (or any other trigger)")
+s.msg("or", "or", "trigger: request · low retrieval · Appendix A limit · sentiment · 3rd repeat · out of scope · verification or ASR failure")
+s.msg("or", "hs", "create packet: system facts (assurance, tasks, tool calls, citations) + 3-line summary (8B, fixed schema, marked AI)")
+s.msg("hs", "or", "handoff_id H-311", ret=True)
+f = s.y + 20; s.y += 25
+s.msg("or", "gx", "end AudioConnector: next=handoff · participant data {handoff_id, intent, language, priority} — IDs only")
+s.msg("gx", "c", "\"Connecting you to a colleague — about 2 minutes\"", ret=True)
+s.frame("alt  voice", "c", "gx", f, s.y + 20); s.y += 30
+f = s.y + 20; s.y += 25
+s.msg("or", "gx", "transfer the chat thread to the agent queue (handoff_id)")
+s.frame("alt  chat", "c", "gx", f, s.y + 20); s.y += 30
+s.msg("gx", "ac", "skills-based routing (intent · language · priority) → agent accepts")
+s.msg("ac", "bff", "GET /handoffs/H-311  (agent's own SSO token)")
+s.msg("bff", "bff", "check: role cs_agent · MFA · interaction assigned to this agent (Genesys)")
+s.msg("bff", "hs", "fetch packet + full bot transcript")
+s.msg("hs", "bff", "packet", ret=True)
+s.msg("bff", "sor", "customer overview + open tasks (agent token, masked per role)")
+s.msg("sor", "bff", "data", ret=True)
+s.msg("bff", "ac", "render panels 1–7 · audit: agent U77 viewed H-311", ret=True)
+s.note_over("c", "sor", "\"Verified by AI 10:02 (voice_otp_dob)\" is shown, so no re-verification in the same call. The customer's token is never passed to the agent.", zone="sec")
+s.msg("ac", "c", "human conversation (voice / chat)")
+s.msg("ac", "bff", "wrap-up: AI-drafted notes → agent edits · disposition · feedback on the AI (reason code)")
+s.msg("bff", "sor", "notes → CRM · feedback → annotation queue → golden set")
+s.msg("bff", "bff", "revoke access to this customer 30 min after wrap-up")
+s.note_over("c", "sor", "No hand-back to the AI. Phase 2 agent assist only suggests; the AI never sends on the agent's behalf.", zone="obs")
+save(s, "C8-handoff.drawio")
+
 # ---------------- D1 Events & cross-channel ----------------
 s = Sequence("D1 Events", [("or", "Orchestrator", "core"), ("kf", "Kafka", "data"), ("nt", "Notification svc", "core"),
                             ("crm", "CRM sync", "ext"), ("au", "Audit (WORM)", "sec"), ("bi", "Reporting", "obs"), ("cu", "Customer devices", "client")])

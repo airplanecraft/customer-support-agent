@@ -8,6 +8,24 @@ Newest first. Each entry is written in English and Chinese. Diagram IDs refer to
 
 ---
 
+## v1.3 — 2026-11-25
+
+**English**
+- New **section 13, Human handoff and agent console**: four kinds of human-in-the-loop (handoff, approval, agent assist, review); handoff triggers; the handoff packet (facts from system records, only the 3-line summary from the LLM); voice and chat routing via Genesys with `handoff_id` only; verification carries over within the same interaction, the customer's token never goes to the agent; agent console (staff SSO + MFA, assigned interactions only, 8 panels, audited views, wrap-up with feedback on the AI); supervisor can monitor and take over live AI chats; agent assist as phase 2; no hand-back to the AI; metrics.
+- New diagrams: A5 agent console layout, C8 handoff sequence.
+- Roles: `cs_agent` limited to assigned interactions; new `supervisor` and `qa` rows.
+- New boundaries: BND-ACT-08 (assist never sends), BND-DAT-08 (assigned interactions only), BND-TRS-08 (packet facts from system records).
+- Sections 13–22 renumbered (14 Guardrails … 22 Tech stack).
+
+**中文**
+- 新增 **第 13 节 转人工与坐席控制台**：四种人工介入（转人工、审批、坐席辅助、复核）；转人工的触发条件；交接包（事实来自系统记录，LLM 只写三行摘要）；语音和聊天经 Genesys 路由，只传 `handoff_id`；同一次交互内核验结果沿用，客户 token 永不交给坐席；坐席控制台（员工 SSO + MFA、只看分配的交互、8 个区域、查看留审计、收尾时给 AI 反馈）；主管可监看并接手 AI 聊天；坐席辅助放第二期；不转回 AI；指标。
+- 新图：A5 坐席控制台布局、C8 转人工时序图。
+- 角色：`cs_agent` 限定为分配的交互；新增 `supervisor` 和 `qa`。
+- 新边界：BND-ACT-08（辅助模式不代发）、BND-DAT-08（只看分配的交互）、BND-TRS-08（交接包事实来自系统记录）。
+- 第 13–22 节重新编号（14 护栏 …… 22 技术栈）。
+
+---
+
 ## v1.2 — 2026-11-25
 
 **English**

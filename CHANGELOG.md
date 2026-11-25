@@ -8,6 +8,22 @@ Newest first. Each entry is written in English and Chinese. Diagram IDs refer to
 
 ---
 
+## v1.6 — 2026-11-25
+
+**English**
+- New **15.9 Test tooling**: open-source tools per layer (unit, LangGraph units, contract, integration, identity, agent evaluation, RAG, red team, voice, web / app / console, performance, fault injection, security, privacy, synthetic data, CI).
+- Identity testing: mock-oauth2-server + PyJWT (incl. forged invalid tokens) → Keycloak in CI → the client's real IdP (e.g. an Auth0 test tenant) in staging; code depends only on standard OIDC / OAuth endpoints.
+- Voice testing without commercial tools: our own AudioConnector test client, FreeSWITCH or PJSIP as a test caller, SIPp for load; Cyara only if the client already owns it.
+- Section 22 tech stack lists the test tooling.
+
+**中文**
+- 新增 **15.9 测试工具**：按层列出开源工具（单元、LangGraph 单元、契约、集成、身份、agent 评估、RAG、红队、语音、Web / App / 控制台、性能、故障注入、安全、隐私、合成数据、CI）。
+- 身份测试：mock-oauth2-server + PyJWT（含伪造非法 token）→ CI 用 Keycloak → 预发布用客户真实的 IdP（例如 Auth0 测试租户）；代码只依赖标准 OIDC / OAuth 接口。
+- 语音测试不依赖商业工具：自研 AudioConnector 测试客户端、FreeSWITCH 或 PJSIP 作为测试来电者、SIPp 压测；Cyara 只在客户已有时使用。
+- 第 22 节技术栈加入测试工具。
+
+---
+
 ## v1.5 — 2026-11-25
 
 **English**

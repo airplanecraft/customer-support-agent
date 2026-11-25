@@ -1055,6 +1055,31 @@ owner: compliance
 
 **Metrics:** task success, containment, correct handoff, citation accuracy, hallucination rate, violations (must be 0), voice P95 latency, cost per conversation.
 
+### 15.9 Test tooling
+
+Open source by default. The application depends only on standard OIDC / OAuth endpoints (JWKS, `/authorize`, `/token`, token exchange), so the IdP used in tests can differ from production.
+
+| Layer | Default tools | Optional |
+|---|---|---|
+| Unit | pytest, pytest-asyncio; **Hypothesis** (property-based tests for guardrail rules and parsers) | syrupy (snapshots) |
+| LangGraph and agent units | LangChain fake chat models (`GenericFakeChatModel`) for fixed outputs; `InMemorySaver` and `InMemoryStore` instead of Postgres | vcrpy / pytest-recording to replay recorded LLM responses |
+| Contract and API | **Pact** (consumer-driven contracts, including error codes); **Schemathesis** (fuzzing from OpenAPI); **WireMock** or Prism to mock core-system APIs | MCP Inspector |
+| Integration environment | **Testcontainers**: Postgres + pgvector, Redis, Redpanda (Kafka-compatible), Milvus, Keycloak, MinIO | docker compose for local development |
+| **Identity** | Unit and contract: **mock-oauth2-server** + **PyJWT** (also forges invalid tokens: `alg=none`, wrong `aud`, expired, unknown `kid`, ID token as access token). CI and nightly: **Keycloak** container (token exchange, CIBA, test users per role and `acr`). **Staging E2E: the client's real IdP**, e.g. an Auth0 or Entra ID test tenant | OpenID Foundation conformance suite for the BFF |
+| Agent evaluation and simulation | **Langfuse** datasets, experiments and judges; our **simulation harness** ([15.3](#153-agent-simulation-harness)); **agentevals** (trajectory matching); **openevals** (multi-turn simulation, LLM-as-judge) | DeepEval, Inspect AI |
+| RAG | **ranx** or pytrec_eval (Recall@k, MRR, nDCG); **RAGAS** (context precision and recall, faithfulness) with judges through our gateway | — |
+| Red team | **promptfoo**, **garak**, **PyRIT** | Giskard |
+| **Voice** | **Our AudioConnector test client** (Python, WebSocket, per the published Genesys protocol): streams TTS + noise, injects DTMF and barge-in, records replies — no telephony needed. **FreeSWITCH** (ESL scripts) or **baresip / PJSIP (pjsua2)** as a test caller into the Genesys test org for a few real calls nightly. **SIPp** for load (load on Genesys itself needs Genesys's approval). **jiwer** (CER / WER), **audiomentations** (noise), CosyVoice (test audio) | **Pipecat** for a voice-to-voice simulated customer; Botium Core (check maintenance); **Cyara** (commercial) if the client already owns it |
+| Web, app and agent console | **Playwright** (web and console, including WebSocket); **Maestro** or Appium (mobile app); axe-core (accessibility) | Detox |
+| Performance | **k6** (HTTP and WebSocket); **Locust** (Python chat load); **vLLM benchmark scripts** or GuideLLM (throughput, time to first token) | — |
+| Fault injection | **Chaos Mesh** (Kubernetes); **Toxiproxy** (latency, disconnects); **Istio fault injection** (delay, abort) | LitmusChaos |
+| Security | Semgrep, Bandit (SAST); **OWASP ZAP** (DAST); **Trivy** (images, IaC); gitleaks; Checkov; pip-audit | Burp Suite for manual pentests |
+| Privacy | **Presidio** asserts there is **no PII** in logs, traces or Kafka messages after every E2E run (BND-DAT-04) | — |
+| Synthetic data | Faker (locales such as `zh_TW`) for customer fixtures | SDV |
+| CI and reporting | GitHub Actions or GitLab CI; Allure reports; Pact Broker | — |
+
+**Two habits that catch real bugs:** assert on **OpenTelemetry traces** rather than logs (e.g. "verification happened before the account lookup"); and run the **RAG gate** (ranx + RAGAS) in CI before any `kb_live` alias switch.
+
 ---
 
 ## 16. LLMOps: Git, pipeline and Langfuse
@@ -1271,7 +1296,7 @@ The diagrams are generated from code so they stay consistent and diffable. You c
 
 ## 22. Tech stack
 
-LangGraph · LangChain · vLLM · Qwen3 (32B / 8B / 30B-A3B) · Qwen3-Embedding · Qwen3-Reranker · Qwen2.5-VL · Alibaba Cloud Model Studio (Bailian: Qwen, Paraformer, CosyVoice) · FunASR / SenseVoice · CosyVoice · Genesys Cloud CX / Engage (AudioConnector, Architect, Data Actions) · Milvus (dense + BM25) · Postgres · Redis · Kafka · Kubernetes (CPU/GPU pools, KEDA, NVIDIA GPU Operator) · Istio/Linkerd (mTLS) · OIDC IdP (e.g. Keycloak) with token exchange and CIBA · Apigee/Kong · Vault · cert-manager · Argo CD · Langfuse (prompts, datasets, LLM-as-judge, traces) · promptfoo / garak / PyRIT (red team) · ELK · Prometheus/Grafana
+LangGraph · LangChain · vLLM · Qwen3 (32B / 8B / 30B-A3B) · Qwen3-Embedding · Qwen3-Reranker · Qwen2.5-VL · Alibaba Cloud Model Studio (Bailian: Qwen, Paraformer, CosyVoice) · FunASR / SenseVoice · CosyVoice · Genesys Cloud CX / Engage (AudioConnector, Architect, Data Actions) · Milvus (dense + BM25) · Postgres · Redis · Kafka · Kubernetes (CPU/GPU pools, KEDA, NVIDIA GPU Operator) · Istio/Linkerd (mTLS) · OIDC IdP (e.g. Keycloak) with token exchange and CIBA · Apigee/Kong · Vault · cert-manager · Argo CD · Langfuse (prompts, datasets, LLM-as-judge, traces) · promptfoo / garak / PyRIT (red team) · ELK · Prometheus/Grafana · Testing: pytest · Hypothesis · Pact · Schemathesis · WireMock · Testcontainers · Keycloak · mock-oauth2-server · agentevals / openevals · ranx · RAGAS · FreeSWITCH / PJSIP · SIPp · jiwer · Playwright · Maestro · k6 · Locust · Chaos Mesh · Toxiproxy · OWASP ZAP · Trivy · Semgrep · Presidio
 
 ---
 

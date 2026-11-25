@@ -1056,6 +1056,31 @@ owner: compliance
 
 **指标：** 任务成功率、自助解决率、转人工正确率、引用准确率、幻觉率、违规数（必须为 0）、语音 P95 延迟、每次对话成本。
 
+### 15.9 测试工具
+
+默认用开源工具。应用只依赖标准的 OIDC / OAuth 接口（JWKS、`/authorize`、`/token`、token exchange），所以测试用的 IdP 可以和生产不同。
+
+| 层 | 默认工具 | 可选 |
+|---|---|---|
+| 单元 | pytest、pytest-asyncio；**Hypothesis**（对护栏规则和解析器做基于属性的测试） | syrupy（快照） |
+| LangGraph 与 agent 单元 | LangChain 的 fake chat model（`GenericFakeChatModel`）返回固定输出；用 `InMemorySaver` 和 `InMemoryStore` 代替 Postgres | vcrpy / pytest-recording 回放录制的 LLM 响应 |
+| 契约与 API | **Pact**（消费方驱动的契约，包括错误码）；**Schemathesis**（根据 OpenAPI 做模糊测试）；**WireMock** 或 Prism 模拟核心系统 API | MCP Inspector |
+| 集成环境 | **Testcontainers**：Postgres + pgvector、Redis、Redpanda（兼容 Kafka）、Milvus、Keycloak、MinIO | 本地开发用 docker compose |
+| **身份** | 单元和契约：**mock-oauth2-server** + **PyJWT**（也用来伪造非法 token：`alg=none`、`aud` 不对、过期、未知 `kid`、ID token 冒充 access token）。CI 和每晚：**Keycloak** 容器（token exchange、CIBA、按角色和 `acr` 准备测试用户）。**预发布端到端：用客户真实的 IdP**，例如 Auth0 或 Entra ID 的测试租户 | BFF 跑 OpenID Foundation conformance suite |
+| Agent 评估与模拟 | **Langfuse** 的数据集、实验和 judge；我们的 **模拟测试框架**（[15.3](#153-agent-模拟测试框架)）；**agentevals**（轨迹匹配）；**openevals**（多轮模拟、LLM-as-judge） | DeepEval、Inspect AI |
+| RAG | **ranx** 或 pytrec_eval（Recall@k、MRR、nDCG）；**RAGAS**（context precision/recall、忠实度），judge 经我们的网关调用 | — |
+| 红队 | **promptfoo**、**garak**、**PyRIT** | Giskard |
+| **语音** | **自研 AudioConnector 测试客户端**（Python、WebSocket，按 Genesys 公开的协议）：推送 TTS 加噪声的音频、注入 DTMF 和插话、录下回复 —— 不需要电话线路。**FreeSWITCH**（ESL 脚本）或 **baresip / PJSIP（pjsua2）** 作为测试来电者，每晚向 Genesys 测试组织打少量真实电话。**SIPp** 做压测（对 Genesys 本身压测需 Genesys 批准）。**jiwer**（CER / WER）、**audiomentations**（加噪声）、CosyVoice（合成测试音频） | **Pipecat** 做语音对语音的模拟客户；Botium Core（先确认维护状态）；客户已有的话可用商业产品 **Cyara** |
+| Web、App 与坐席控制台 | **Playwright**（Web 和控制台，包括 WebSocket）；**Maestro** 或 Appium（手机 App）；axe-core（无障碍） | Detox |
+| 性能 | **k6**（HTTP 和 WebSocket）；**Locust**（用 Python 写聊天压测）；**vLLM 自带的 benchmark 脚本** 或 GuideLLM（吞吐、首 token 时间） | — |
+| 故障注入 | **Chaos Mesh**（Kubernetes）；**Toxiproxy**（延迟、断线）；**Istio 故障注入**（delay、abort） | LitmusChaos |
+| 安全 | Semgrep、Bandit（静态扫描）；**OWASP ZAP**（动态扫描）；**Trivy**（镜像、IaC）；gitleaks；Checkov；pip-audit | 人工渗透测试用 Burp Suite |
+| 隐私 | 每次端到端测试后用 **Presidio** 断言日志、trace 和 Kafka 消息里 **没有 PII**（BND-DAT-04） | — |
+| 合成数据 | Faker（支持 `zh_TW` 等 locale）生成客户 fixture | SDV |
+| CI 与报告 | GitHub Actions 或 GitLab CI；Allure 报告；Pact Broker | — |
+
+**两个能抓到真实 bug 的习惯：** 用 **OpenTelemetry trace** 做断言，而不是解析日志（例如"核验发生在查账之前"）；在 CI 里切换 `kb_live` 别名前，先跑 **RAG 闸门**（ranx + RAGAS）。
+
 ---
 
 ## 16. LLMOps Git 流水线与 Langfuse
@@ -1272,7 +1297,7 @@ done
 
 ## 22. 技术栈
 
-LangGraph · LangChain · vLLM · Qwen3（32B / 8B / 30B-A3B）· Qwen3-Embedding · Qwen3-Reranker · Qwen2.5-VL · 阿里云百炼（Qwen、Paraformer、CosyVoice）· FunASR / SenseVoice · CosyVoice · Genesys Cloud CX / Engage（AudioConnector、Architect、Data Actions）· Milvus（向量 + BM25）· Postgres · Redis · Kafka · Kubernetes（CPU/GPU 节点池、KEDA、NVIDIA GPU Operator）· Istio/Linkerd（mTLS）· OIDC IdP（例如 Keycloak），支持 token exchange 和 CIBA · Apigee/Kong · Vault · cert-manager · Argo CD · Langfuse（prompt、数据集、LLM-as-judge、trace）· promptfoo / garak / PyRIT（红队）· ELK · Prometheus/Grafana
+LangGraph · LangChain · vLLM · Qwen3（32B / 8B / 30B-A3B）· Qwen3-Embedding · Qwen3-Reranker · Qwen2.5-VL · 阿里云百炼（Qwen、Paraformer、CosyVoice）· FunASR / SenseVoice · CosyVoice · Genesys Cloud CX / Engage（AudioConnector、Architect、Data Actions）· Milvus（向量 + BM25）· Postgres · Redis · Kafka · Kubernetes（CPU/GPU 节点池、KEDA、NVIDIA GPU Operator）· Istio/Linkerd（mTLS）· OIDC IdP（例如 Keycloak），支持 token exchange 和 CIBA · Apigee/Kong · Vault · cert-manager · Argo CD · Langfuse（prompt、数据集、LLM-as-judge、trace）· promptfoo / garak / PyRIT（红队）· ELK · Prometheus/Grafana · 测试：pytest · Hypothesis · Pact · Schemathesis · WireMock · Testcontainers · Keycloak · mock-oauth2-server · agentevals / openevals · ranx · RAGAS · FreeSWITCH / PJSIP · SIPp · jiwer · Playwright · Maestro · k6 · Locust · Chaos Mesh · Toxiproxy · OWASP ZAP · Trivy · Semgrep · Presidio
 
 ---
 

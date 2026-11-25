@@ -8,6 +8,20 @@ Newest first. Each entry is written in English and Chinese. Diagram IDs refer to
 
 ---
 
+## v1.4 — 2026-11-25
+
+**English**
+- New **Appendix B, Failure modes and degradation**: principles (identity and writes fail closed, reads degrade, never fabricate, transactional outbox, reconcile unknown write outcomes); four degradation levels with kill switches; 36 failure modes (`FM-01…36`) across channels, speech, models, retrieval, identity, data, core systems, orchestration, handoff, security and site, each with detection, automatic response and customer experience; recovery objectives (RTO / RPO).
+- New diagram F1: degradation levels and kill switches.
+- Section 10 recovery table keeps session-level cases and links to Appendix B for component failures; the resilience suite now has one fault-injection case per failure mode.
+
+**中文**
+- 新增 **附录 B 故障模式与降级**：原则（身份和写操作 fail closed、只读降级、绝不编造、transactional outbox、写操作结果不确定时对账）；四个降级等级和关闭开关；36 个故障模式（`FM-01…36`），覆盖渠道、语音、模型、检索、身份、数据、核心系统、编排、转人工、安全和站点，每个都有发现方式、自动处理和客户体验；恢复目标（RTO / RPO）。
+- 新图 F1：降级等级与关闭开关。
+- 第 10 节的恢复表保留会话层面的情况，组件故障链接到附录 B；韧性测试集为每个故障模式准备一个故障注入用例。
+
+---
+
 ## v1.3 — 2026-11-25
 
 **English**

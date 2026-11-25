@@ -39,6 +39,7 @@ It is designed for **regulated industries** (financial services, healthcare, tel
 21. [Repository layout and regenerating the diagrams](#21-repository-layout-and-regenerating-the-diagrams)
 22. [Tech stack](#22-tech-stack)
 - [Appendix A. System boundaries](#appendix-a-system-boundaries)
+- [Appendix B. Failure modes and degradation](#appendix-b-failure-modes-and-degradation)
 
 ---
 
@@ -582,12 +583,11 @@ It is encoded, **not encrypted**, so no sensitive data goes into it.
 
 | Failure | Recovery |
 |---|---|
-| Orchestrator pod restarts | Resume from the Postgres checkpoint: `invoke(None, config)` with the same `thread_id` |
-| Voice gateway restarts while the call is still up | Genesys re-opens AudioConnector for the same `conversationId` (or routes to the ACD queue); resume from the checkpoint, or hand off |
 | Customer drops mid-task | Task marked interrupted, with progress saved; SMS sent with a resume path; re-verification on return |
 | Page refresh | Same session ID → reload from the checkpoint; never show half a generation |
 | Approval pause | A designed `interrupt()` that can last days; resumed by the approver |
-| Model or tool timeout | Retry, then degrade (smaller model, "can't retrieve right now", handoff). **Never fabricate.** |
+
+**Component failures** (orchestrator, voice gateway, models, tools, data stores, identity, whole site) and the degradation levels are in [Appendix B](#appendix-b-failure-modes-and-degradation).
 
 Every side-effecting tool takes an **idempotency key** (`task_id` + step), so a replayed step never creates duplicates.
 
@@ -848,7 +848,7 @@ A handful of serious safety failures must not be averaged away by thousands of g
 |---|---|---|
 | **Golden set** (capability) | Does the system handle real customer requests correctly? | Thresholds; no regression against the current release |
 | **Boundary and guardrail suite** (safety) | Can it be pushed into doing what it must never do? | **Zero tolerance** for binding commitments, privilege escalation and PII leaks |
-| **Resilience suite** | Does it degrade safely under timeouts, failures and load? | Correct degradation; never fabricate |
+| **Resilience suite** | Does it degrade safely under timeouts, failures and load? One fault-injection case per failure mode in [Appendix B](#appendix-b-failure-modes-and-degradation) | Correct degradation; never fabricate |
 
 ### 15.2 Golden set from historical interactions
 
@@ -1157,7 +1157,7 @@ docs/img/*.png           exported previews used in this README
 tools/drawio_lib.py      tiny generator for component and sequence diagrams
 tools/gen_components.py  A1–A5, R1–R3
 tools/gen_sequences.py   B1–B5, C1–C8, D1–D2
-tools/gen_state.py       M1–M2
+tools/gen_state.py       M1–M2, F1
 tools/gen_llmops.py      L1, G1, E1, E2, P1
 ```
 
@@ -1365,3 +1365,135 @@ LangGraph's `recursion_limit` counts super-steps of the **whole graph** per invo
 | Checkpoints | 30 days, then archived | — |
 | Long-term memory | 90 days | TTL sweep |
 | Survey invitations | Once per customer per 7 days | Not invited |
+
+---
+
+## Appendix B. Failure modes and degradation
+
+[Appendix A](#appendix-a-system-boundaries) says what must never happen and how far the system may go. This appendix says **what happens when a component breaks**. Every failure mode (`FM-xx`) has a fault-injection case in the resilience suite ([section 15.1](#151-three-suites-kept-separate)) and is rehearsed in quarterly game days. Values are starting points, like Appendix A.
+
+**Principles**
+- **Identity and writes fail closed; reads and caches degrade.**
+- **Never fabricate.** Tell the customer honestly what is happening and what happens next.
+- **Events go through a transactional outbox** in Postgres, so a Kafka outage delays notifications but never loses them.
+- **An unknown write outcome is reconciled, never blindly retried**: look the request up by its idempotency key first.
+- Every failure mode has a detection signal, an alert and a runbook.
+
+### B.1 Degradation levels and kill switches
+
+![F1 Degradation levels](docs/img/F1-degradation-levels.png)
+*F1 · Degradation levels and kill switches — source: [`F1-degradation-levels.drawio`](docs/diagrams/F1-degradation-levels.drawio)*
+
+| Level | State | Enter when |
+|---|---|---|
+| 0 · Normal | All channels, intents and tools | — |
+| 1 · Reduced | Smaller models; shorter voice answers; some intents go straight to humans | GPU short, latency over budget, Bailian rate-limited, TTS on backup |
+| 2 · Safe mode | **RAG answers only; no tool calls, no writes**; personal-data intents hand off | IdP or STS down, core systems down, Redis-sec down, checkpoint writes failing |
+| 3 · AI off | Everything to humans; voice to IVR menu or ACD | Severe incident, a bad release that won't roll back, compliance pause |
+
+**Kill switches** are feature flags per channel, intent, tool and model alias. They take effect in seconds without a redeploy, can be triggered by the on-call SRE or the compliance lead, and are always audited. Some level changes are automatic (IdP or STS down → level 2 for personal-data intents; a canary red line → rollback); **level 3 always needs a human decision**. Recovery steps back one level at a time after health checks pass.
+
+### B.2 Failure modes
+
+**Channels and telephony**
+
+| ID | Failure | Detection | Automatic response | Customer experience |
+|---|---|---|---|---|
+| FM-01 | Genesys outage | Genesys status, call volume drop | Genesys's own fallback (IVR message, overflow); chat unaffected | Contact-centre message |
+| FM-02 | AudioConnector drops mid-call | WebSocket closed without a hang-up event | Genesys routes to the ACD queue with the `handoff_id`; checkpoint kept | "Let me connect you to a colleague" |
+| FM-03 | Voice gateway pod crash | Liveness and readiness probes | Genesys re-opens AudioConnector for the same `conversationId` → resume from checkpoint, else ACD | Short pause or transfer |
+| FM-04 | Chat WebSocket drops | Client heartbeat | Auto-reconnect; reload from checkpoint; never show half a generation | "Reconnecting…" |
+| FM-05 | Push or SMS provider down | Delivery error rate | Next channel in the customer's preference order; outbox retries | Notification arrives later |
+
+**Speech**
+
+| ID | Failure | Detection | Automatic response | Customer experience |
+|---|---|---|---|---|
+| FM-06 | STT quality drops | Confidence and reprompt rate per language | DTMF for digits; shorter turns; handoff after 2 reprompts | "Sorry, please press…" |
+| FM-07 | TTS unavailable | Error rate | Backup TTS voice → "I've sent the answer to your app" → handoff | Different voice or transfer |
+
+**Models**
+
+| ID | Failure | Detection | Automatic response | Customer experience |
+|---|---|---|---|---|
+| FM-08 | vLLM down or queue over budget | Health, queue depth | Gateway routes to a smaller model group; level 1 | Slightly shorter answers |
+| FM-09 | Bailian errors or rate limits (cloud) | 5xx and 429 rates | Backoff within the deadline → secondary endpoint if contracted → level 1 or 2 | Possible wait or handoff |
+| FM-10 | Malformed structured output | Schema validation | Retry once, then the fallback path (ask the customer or hand off) | — |
+| FM-11 | Citation or faithfulness check fails | Output guard | Drop the sentence, "I can't confirm that", or hand off; a spike is treated as a regression | Shorter answer |
+| FM-12 | Judge or rule-eval service down | Health | Runtime guardrails unaffected (in-process); online scoring queued; release gates blocked | None |
+
+**Retrieval**
+
+| ID | Failure | Detection | Automatic response | Customer experience |
+|---|---|---|---|---|
+| FM-13 | Milvus down | Health | Postgres full-text search over the clause table; voice answers only at high confidence, else hand off | Fewer answers |
+| FM-14 | Bad KB snapshot | Retrieval eval; citation-failure spike | Switch the `kb_live` alias back to the previous snapshot | None |
+| FM-15 | Embedding or reranker down | Health | BM25 only; skip rerank with a stricter score threshold | None |
+
+**Identity**
+
+| ID | Failure | Detection | Automatic response | Customer experience |
+|---|---|---|---|---|
+| FM-16 | IdP down | Health; token errors | Existing sessions continue until expiry; no new logins or verifications; general questions only; personal-data intents hand off | "I can answer general questions; for your account I'll connect you" |
+| FM-17 | JWKS fetch fails | Errors | Keep cached keys (up to 24 h); unknown `kid` rejected | None |
+| FM-18 | STS (token exchange) down | Errors | **Fail closed**: no tool calls that need a user token → level 2 | As FM-16 |
+| FM-19 | SMS OTP gateway down | Send failures | CIBA push to the app if registered; otherwise hand off | "I'll send a request to your app" |
+
+**Data**
+
+| ID | Failure | Detection | Automatic response | Customer experience |
+|---|---|---|---|---|
+| FM-20 | Postgres primary fails | Health | Automatic failover to the synchronous replica (RPO 0); in-flight turns resume from checkpoint | Short pause |
+| FM-21 | Checkpoint write fails | Write error | **No write tool runs without a durable checkpoint**; read-only answers continue | None |
+| FM-22 | Redis-sec down | Errors | Tokens lost → fail closed → re-authenticate (chat: login refresh; voice: re-verify or hand off) | Re-verification |
+| FM-23 | Redis-cache down | Errors | Bypass the cache and read sources; rate limiting falls back to the gateway | Slower |
+| FM-24 | Kafka down or lagging | Broker health, consumer lag | Transactional outbox keeps events in Postgres; publishing resumes on recovery; consumers are idempotent | Notifications delayed |
+
+**Core systems**
+
+| ID | Failure | Detection | Automatic response | Customer experience |
+|---|---|---|---|---|
+| FM-25 | Read API slow or down | Latency, errors | Circuit breaker; offer an SMS follow-up or handoff | "I can't retrieve that right now" |
+| FM-26 | **Write API times out; outcome unknown** | Timeout | Look up by idempotency key and reconcile; still unknown → task marked "pending confirmation" in a human reconciliation queue; **never retry blindly** | "Submitted — we'll notify you of the result" |
+| FM-27 | Archive store slow | Latency | Voice says "one moment", then sends results to the app or SMS; chat shows an async card | Wait |
+
+**Orchestration and release**
+
+| ID | Failure | Detection | Automatic response | Customer experience |
+|---|---|---|---|---|
+| FM-28 | Orchestrator pod crash | Health | Resume from checkpoint: `invoke(None, config)` with the same `thread_id` | Short pause |
+| FM-29 | Langfuse prompt registry unreachable | Fetch errors | Local cache, then the image-baked prompts of the pinned release | None |
+| FM-30 | Bad release (quality or latency) | Canary judges, rules, latency | Automatic rollback: move the label back and switch the gateway weight | None |
+| FM-31 | Loop limit or tool-error streak | Guard counters | As in [A.5.4](#a54-agent-loop) → hand off | Handoff |
+
+**Handoff**
+
+| ID | Failure | Detection | Automatic response | Customer experience |
+|---|---|---|---|---|
+| FM-32 | No agents or queue overflow | Queue wait time | Expected wait; callback task; after hours, a message plus a task | Wait or callback |
+| FM-33 | Handoff service down | Errors | Transfer anyway with intent and language in participant data; the console shows "packet unavailable" and loads the transcript later | The agent may need to ask again |
+
+**Security**
+
+| ID | Failure | Detection | Automatic response | Customer experience |
+|---|---|---|---|---|
+| FM-34 | Injection campaign or abuse spike | Guardrail events, rates | Block, rate-limit, alert the SOC; raise the degradation level for the affected channel if needed | Generic refusal |
+| FM-35 | OTP brute force or SMS pumping | Failure and send rates | Lock the number, throttle sends, alert the SOC | Lock message |
+
+**Site**
+
+| ID | Failure | Detection | Automatic response | Customer experience |
+|---|---|---|---|---|
+| FM-36 | Data centre or region outage | Multiple signals | Fail over to DR; GPUs are warm standby, so capacity sets level 1–3; voice to IVR or humans if needed | Possibly degraded service |
+
+### B.3 Recovery objectives
+
+| Scope | RTO | RPO |
+|---|---|---|
+| Voice AI (humans cover in the meantime) | 15 min | — (stateless; state is in Postgres) |
+| Chat AI | 15 min | — |
+| Tasks, approvals, drafts, checkpoints | With Postgres failover | **0** (synchronous replication) |
+| Audit and per-call records | With Postgres failover | **0** |
+| Long-term memory | — | ≤ 15 min (asynchronous) |
+| Langfuse traces (not a system of record) | 4 h | ≤ 1 h |
+| Full site failover to DR | 1 h | 0 for tasks; caches are rebuilt |

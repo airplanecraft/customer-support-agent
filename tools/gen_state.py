@@ -74,3 +74,28 @@ d.box("<b>Redis-cache</b>: embeddings · retrieval · FAQ · account summary · 
 d.box("<b>Never cached</b><br>write-tool results · entitlements / permissions (or ≤ 60 s) · semantic cache of personalised answers · checkpoints (Postgres is the source of truth)", 30, 620, 1100, 90, "sec")
 d.note("<b>Invalidation = version in the key</b><br>KB snapshot, embedding model, release label.<br>A new release changes the key; no manual purges.<br>The only explicit purge: write tools → account summary.", 1180, 610, 690, 110)
 d.save(os.path.join(OUT, "M2-cache-map.drawio"))
+
+# ======================= F1 Degradation levels =======================
+d = Diagram("F1 Degradation Levels", 1900, 820)
+d.text("F1 · Degradation levels and kill switches — fail closed for identity and writes, degrade for reads", 40, 10, 1400, 30, 16, True)
+lv = [
+    ("<b>Level 0 · Normal</b><br><br>all channels, intents and tools<br>full models (32B / 8B)", "core", "—"),
+    ("<b>Level 1 · Reduced</b><br><br>smaller models (8B / 30B-A3B)<br>shorter voice answers<br>some intents go straight to humans", "edge", "GPU short · latency over budget ·<br>Bailian rate-limited · TTS on backup"),
+    ("<b>Level 2 · Safe mode</b><br><br><b>RAG answers only</b><br>no tool calls, no writes<br>personal-data intents → handoff", "obs", "IdP / STS down · core systems down ·<br>Redis-sec down · checkpoint writes failing"),
+    ("<b>Level 3 · AI off</b><br><br>everything to humans<br>voice → IVR menu / ACD<br>chat → human queue or message", "sec", "severe incident · bad release not<br>rolling back · compliance pause"),
+]
+prev = None
+for i, (label, zone, trig) in enumerate(lv):
+    x = 40 + i * 460
+    b = d.box(label, x, 80, 400, 190, zone)
+    d.box("<b>Enter when</b><br>" + trig, x, 300, 400, 90, "data", extra_style="fontSize=11;")
+    if prev:
+        d.link(prev, b, "worse")
+    prev = b
+d.zone("Kill switches (feature flags, no redeploy, effective in seconds)", 40, 430, 1820, 170, "sec")
+d.box("<b>Scope</b><br>per channel · per intent ·<br>per tool · per model alias", 80, 475, 380, 100, "sec")
+d.box("<b>Who</b><br>on-call SRE or compliance lead<br>every switch audited", 520, 475, 380, 100, "sec")
+d.box("<b>Automatic</b><br>IdP / STS down → level 2 for personal intents<br>canary red line → rollback<br>level 3 needs a human decision", 960, 475, 460, 100, "sec")
+d.box("<b>Recovery</b><br>step back one level at a time<br>after health checks pass", 1480, 475, 340, 100, "sec")
+d.note("Principles: identity and writes fail closed · reads and caches degrade · never fabricate ·<br>tell the customer honestly · events via transactional outbox · unknown write outcome → reconcile, never blind retry", 40, 630, 1100, 70)
+d.save(os.path.join(OUT, "F1-degradation-levels.drawio"))

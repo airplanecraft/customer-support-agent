@@ -55,7 +55,7 @@ The two AI channels:
 - **Voice:** customers call in.
 - **Online chat:** app, web and WhatsApp.
 
-Both channels handle four kinds of request:
+Both channels handle five kinds of request:
 
 | Request type | Example | Handling |
 |---|---|---|
@@ -63,6 +63,7 @@ Both channels handle four kinds of request:
 | Personal account lookup | "When does my plan renew?" "Was this month's payment received?" | Agent calling tools (read only) |
 | Service cases | "What's the status of my case?" "Which documents do I need?" | Agent calling tools; submissions need human approval |
 | Servicing | Change address or registered details; cancellation | AI prepares a draft or request; **a human approves or completes it** |
+| Orders and returns | "Where's my order?" "What did I buy last March?" "Order the same again" "Refund this faulty item" | Read tools; placing an order needs **explicit customer confirmation**; refunds are decided by a rules engine (auto-approval behind a switch) or a human |
 
 **Constraints and non-functional requirements**
 
@@ -184,6 +185,7 @@ In Anthropic's terms this is a **workflow, not an autonomous agent**: a routing 
 | `account_agent` | Qwen3-8B | `get_accounts`, `get_account_detail`, `get_billing_history` | — | verified |
 | `case_agent` | Qwen3-32B | `get_case_status`, `list_required_documents` | `case_guide`, `document_checklist` | verified |
 | `service_agent` | Qwen3-32B | `create_change_draft` (**draft only**) | `profile_change`, `address_change`, `cancellation` | verified + step-up |
+| `order_agent` | Qwen3-32B | `list_orders`, `search_order_history`, `get_order`, `get_spend_summary`, `track_shipment`, `quote_order`, `place_order`, `cancel_order`, `check_refund_eligibility`, `request_refund`, `get_refund_status`, `search_policy` | `order_lookup`, `returns_guide` | verified; writes need explicit confirmation |
 
 ### 4.3 Configuration lives in code, not in prompts
 
@@ -223,6 +225,69 @@ Everything else is a content source the application places into those slots:
 | Structured output | `response_format` (enforced by constrained decoding in vLLM) |
 
 Static content goes first and dynamic content last, so **vLLM prefix caching** cuts time-to-first-token, which matters most for voice.
+
+### 4.6 Tool and API contracts
+
+**Two layers.** Workers call **MCP tools**, which call the **internal REST APIs** of the systems of record. Raw REST APIs are never exposed to the LLM.
+
+| | MCP tool (for the agent) | Internal REST API (system of record) |
+|---|---|---|
+| Granularity | Task-shaped, coarse, few fields | Resource-shaped, fine-grained |
+| Customer scope | **No `customer_id` argument**; it comes from the token | `/customers/me/...`; the backend checks ownership |
+| Output | Summaries, masked fields, LLM-readable errors | Full business data |
+| Callers | The LLM only | MCP servers, staff back office, app |
+
+**Write tiers**
+
+| Tier | Examples | Flow |
+|---|---|---|
+| T0 · read | Order lookup and history, shipment, refund status, return policy | Direct call |
+| T1 · customer-confirmed write | Place an order; cancel an unshipped order; refunds under the auto-approval switch | **Quote → explicit confirmation → commit** |
+| T2 · draft + human approval | Refunds above the threshold or with risk flags; account changes | Draft, then approval ([C4](#9-business-flows)) |
+| T3 · never via AI | Change payout bank account or registered phone | Handoff only |
+
+**Order tools (generic example)**
+
+| Tool | Tier | Internal API |
+|---|---|---|
+| `list_orders(status?, since?, until?, limit≤10, cursor?)` | T0 | `GET /customers/me/orders` (default: last 90 days) |
+| `search_order_history(keyword?, product?, date_range?, amount_range?, limit≤5)` | T0 | `GET /customers/me/orders:search` (main store + archive) |
+| `get_order(order_id)` | T0 | `GET /orders/{id}` |
+| `get_spend_summary(period, group_by?)` | T0 | `GET /customers/me/spend-summary` |
+| `track_shipment(order_id)` | T0 | `GET /orders/{id}/shipment` |
+| `quote_order(items, address_ref)` | T1 | `POST /orders:quote` → summary + `confirmation_token` |
+| `place_order(confirmation_token)` | T1 | `POST /orders` with `Idempotency-Key` |
+| `cancel_order(order_id)` | T1 | `POST /orders/{id}:cancel` (unshipped only) |
+| `check_refund_eligibility(order_id)` | T0 | `GET /orders/{id}/refund-eligibility` |
+| `request_refund(order_id, reason)` | T1 / T2 | `POST /orders/{id}/refund-requests` |
+| `get_refund_status(request_id)` | T0 | `GET /refund-requests/{id}` |
+| `search_policy(query)` | T0 | RAG over return and refund terms; **not an API** |
+
+**Contract rules**
+- **Ownership on every ID** (BOLA, OWASP API1): each `order_id` is checked against the token's `sub`.
+- **Two-step commit for T1 writes.** The quote returns a signed `confirmation_token` (5 minutes, bound to the customer and a hash of the payload). The customer confirms explicitly (a button in chat; "yes" or DTMF 1 on voice). The commit carries only the token, so the LLM can't change parameters after confirmation.
+- **Idempotency:** every write takes `Idempotency-Key` (`task_id` + step); a replay returns the original result.
+- **Small results:** lists are paginated with a cursor and capped; each item is a summary (ID, date, amount, status, first item). Too many matches → return the count and ask the customer to narrow it down.
+- **Numbers come from the system.** Totals and spend summaries are computed by the API; the output guardrail checks that amounts in the answer match tool results.
+- **Channel rendering:** in chat, order lists render as UI cards straight from tool data; on voice, the AI narrows down ("two orders in March — the 12th or the 28th?") instead of reading a list.
+- **History:** orders older than 90 days come from the archive (slower; voice says "one moment"). Beyond the retention period, the AI says the record is no longer kept.
+- **Errors:** `{code, retryable, user_message_key}`, so the worker knows whether to retry, ask, or hand off.
+- **Versioning:** API versions and tool schemas are pinned per release.
+
+**Refunds**
+- **Eligibility is decided by the refund rules engine, not the LLM:** window, item state, amount, prior refunds, risk flags. The AI explains the return policy with citations.
+- **Money only returns to the original payment method**, which closes the "refund to a new account" attack.
+- **Auto-approval is behind a switch** in `config/policy.yaml`, changed only through a reviewed pull request:
+
+```yaml
+refund:
+  auto_approve:
+    enabled: true            # off → every refund goes to human approval
+    max_amount: 1000         # HKD, per refund
+    max_per_customer_30d: 2
+    exclude_risk_flags: [chargeback_history, account_age_lt_30d]
+```
+
 
 ---
 
@@ -356,7 +421,7 @@ See [section 18](#18-deployment-profiles-cloud-vs-on-prem).
 - Caller ID only identifies the *likely* customer, because it can be spoofed. The OTP goes **only to the number on file**, so spoofing doesn't help an attacker.
 - The OTP is 6 digits, valid for 5 minutes, single-use and bound to the call. Sends are rate-limited (against SMS pumping), and verification locks after 3 failures.
 - Failure messages never reveal which factor was wrong.
-- Changing the registered phone, the payment bank account, or completing a cancellation refund **never happens in the AI channel**.
+- Changing the registered phone, the payment bank account, or completing a cancellation refund **never happens in the AI channel**. Order refunds go only to the original payment method, decided by the rules engine ([section 4.6](#46-tool-and-api-contracts)).
 - Date of birth is a weak secret, so residual risk is handled downstream: human approval, out-of-band notifications, cooling-off periods on sensitive changes.
 
 ### 8.2 Tokens
@@ -467,6 +532,21 @@ It is encoded, **not encrypted**, so no sensitive data goes into it.
 
 ![C4 Approval](docs/img/C4-approval-account-change.png)
 *C4 · Account change with human approval — source: [`C4-approval-account-change.drawio`](docs/diagrams/C4-approval-account-change.drawio)*
+
+**Orders (C5).**
+- History: `search_order_history` queries the main store and the archive; results are summaries, cached for the session; chat shows order cards, voice narrows down.
+- Placing an order: quote → the customer confirms the summary explicitly → commit with the `confirmation_token` and an idempotency key.
+
+![C5 Orders](docs/img/C5-orders.png)
+*C5 · Order history and placing an order — source: [`C5-orders.drawio`](docs/diagrams/C5-orders.drawio)*
+
+**Refund (C6).**
+- The AI explains the return policy from RAG with citations; the rules engine decides eligibility.
+- With the switch on and the amount under the threshold, the refund is approved automatically; otherwise it becomes a draft for human approval, as in C4.
+- Money only returns to the original payment method.
+
+![C6 Refund](docs/img/C6-refund.png)
+*C6 · Refund — source: [`C6-refund.drawio`](docs/diagrams/C6-refund.drawio)*
 
 ---
 
@@ -628,7 +708,7 @@ Defence in depth: any layer can refuse, require step-up, or hand off to a human,
 | 1 · Input | Length (≤ 1,000 characters), rate limits per user and client, PII redaction before the LLM and the logs, injection classifier, uploads scanned (AV + CDR) with only the clean copy used, external text treated as data rather than instructions |
 | 2 · Identity and routing | Token `aud`, `scope` and `acr`; role → reachable agents; assurance level per intent (verify or step-up); tools = agent allowlist ∩ role; `recursion_limit = 8` |
 | 3 · Retrieval | Filters built from the token (visibility by role, clause version by contract start date, `owner_id`), never from the model |
-| 4 · Tools | Token exchange with a narrow `aud` and `scope`; ownership check plus row-level security; write tools that only create drafts; idempotency keys; human approval via `interrupt()`; never change phone, bank account or refund |
+| 4 · Tools | Token exchange with a narrow `aud` and `scope`; ownership check plus row-level security; write tools that only create drafts; idempotency keys; quote → confirm → commit for customer-confirmed writes; human approval via `interrupt()`; refunds only to the original payment method, decided by the rules engine; never change phone or bank account |
 | 5 · Output | Citation check (exists, was retrieved, correct version); fast faithfulness check (8B); no binding commitment; disclaimer when terms are discussed; PII leak check; language match; voice answers ≤ 3 sentences |
 
 **One rule set, three uses.** Each rule is defined once in Git (`evaluators/*.yaml`) and used in three places:
@@ -927,7 +1007,7 @@ docs/diagrams/*.drawio   editable draw.io sources (open in draw.io or the VS Cod
 docs/img/*.png           exported previews used in this README
 tools/drawio_lib.py      tiny generator for component and sequence diagrams
 tools/gen_components.py  A1–A4, R1–R3
-tools/gen_sequences.py   B1–B5, C1–C4, D1–D2
+tools/gen_sequences.py   B1–B5, C1–C6, D1–D2
 tools/gen_state.py       M1–M2
 tools/gen_llmops.py      L1, G1, E1, E2, P1
 ```

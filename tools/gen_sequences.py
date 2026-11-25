@@ -229,6 +229,69 @@ s.msg("or", "kf", "task.updated (completed)")
 s.msg("kf", "c", "SMS / push: change completed", ret=True)
 save(s, "C4-approval-account-change.drawio")
 
+# ---------------- C5 Orders: history lookup + place order ----------------
+s = Sequence("C5 Orders", [("c", "Customer<br>(chat / voice)", "client"), ("or", "Orchestrator<br>(LangGraph)", "core"), ("om", "Order MCP", "agent"),
+                            ("rc", "Redis-cache", "data"), ("os", "Order service<br>(internal GW)", "ext"), ("ar", "Order archive<br>(> 90 days)", "data")])
+s.text("C5 · Orders — history lookup, then place order with quote → confirm → commit", 40, 10, 1100, 30, 16, True)
+s.note_over("c", "ar", "Customer verified · customer_id comes from the token's sub, never a tool argument", zone="sec")
+s.msg("c", "or", "\"The headphones I bought last March?\"")
+s.msg("or", "om", "search_order_history(keyword=headphones, date_range=2025-03, limit≤5)")
+s.msg("om", "os", "GET /customers/me/orders:search?q=headphones&from=…&to=…")
+s.msg("os", "ar", "older than 90 days → archive query")
+s.msg("ar", "os", "matches", ret=True)
+s.msg("os", "om", "2 orders (summaries only)", ret=True)
+s.msg("om", "rc", "cache: customer + session + query hash, 5 min")
+s.msg("om", "or", "ORD-1182 · ORD-1190 (id, date, amount, status, first item)", ret=True)
+f0 = s.y + 20; s.y += 25
+s.msg("or", "c", "chat: UI renders order cards from tool data (not LLM text)", ret=True)
+s.msg("or", "c", "voice: \"Two orders in March — the 12th or the 28th?\"", ret=True)
+s.frame("alt  channel", "c", "or", f0, s.y + 20); s.y += 30
+s.msg("c", "or", "\"Order the same again\"")
+s.msg("or", "om", "quote_order(items of ORD-1190, address_ref=default)")
+s.msg("om", "os", "POST /orders:quote")
+s.msg("os", "om", "Q-77: HK$899, delivery Fri, confirmation_token (5 min, bound to customer + payload hash)", ret=True)
+s.msg("or", "c", "\"HK$899, delivered Friday to your default address — confirm?\" (button / say yes / press 1)", ret=True)
+s.msg("c", "or", "explicit \"Yes\"")
+s.msg("or", "om", "place_order(confirmation_token)  — no other parameters")
+s.msg("om", "os", "POST /orders  Idempotency-Key: T-6001:place")
+s.msg("os", "os", "verify token signature · payload hash · expiry · ownership")
+s.msg("os", "om", "ORD-1203 created", ret=True)
+s.msg("om", "rc", "purge this customer's order cache")
+s.msg("or", "c", "\"Order ORD-1203 placed\" + order card", ret=True)
+s.note_over("c", "ar", "After confirmation the LLM can't change anything: commit carries only the token; a replay returns the same order", zone="sec")
+save(s, "C5-orders.drawio")
+
+# ---------------- C6 Refund ----------------
+s = Sequence("C6 Refund", [("c", "Customer", "client"), ("or", "Orchestrator<br>(LangGraph)", "core"), ("rag", "RAG<br>(return policy)", "agent"),
+                            ("om", "Order MCP", "agent"), ("re", "Refund rules<br>engine", "core"), ("ap", "Approver<br>(staff SSO)", "client"),
+                            ("pay", "Payments", "ext"), ("kf", "Kafka → notify", "data")])
+s.text("C6 · Refund — policy via RAG, eligibility by rules, auto-approval behind a switch, otherwise human approval", 40, 10, 1300, 30, 16, True)
+s.msg("c", "or", "\"The headphones from ORD-1203 are faulty — I want a refund\"")
+s.msg("or", "rag", "search_policy(\"return faulty item\")")
+s.msg("rag", "or", "Return policy v2026.3 §4: 30 days; faulty → full refund (citations)", ret=True)
+s.msg("or", "om", "check_refund_eligibility(ORD-1203)")
+s.msg("om", "re", "window · item state · amount · prior refunds · risk flags")
+s.msg("re", "om", "eligible · HK$899 · original payment method only", ret=True)
+s.msg("or", "c", "explains the policy with citations — \"Submit a refund request?\"", ret=True)
+s.msg("c", "or", "explicit \"Yes\"")
+s.msg("or", "om", "request_refund(ORD-1203, reason=faulty)  Idempotency-Key: T-6002:refund")
+s.msg("om", "re", "decide(amount, risk, refund.auto_approve)")
+f1 = s.y + 20; s.y += 25
+s.msg("re", "pay", "refund HK$899 to the original payment method")
+s.msg("re", "om", "R-55 approved automatically", ret=True)
+s.msg("or", "c", "\"Refund approved — 3–5 working days\"", ret=True)
+s.frame("alt  switch ON and amount ≤ threshold", "c", "pay", f1, s.y + 20); s.y += 30
+f2 = s.y + 20; s.y += 25
+s.msg("re", "om", "R-55 pending approval (draft)", ret=True)
+s.msg("or", "c", "\"Submitted — reviewed within 2 working days\"", ret=True)
+s.msg("ap", "re", "approve R-55 (approver's own token; approver ≠ requester)")
+s.msg("re", "pay", "refund to the original payment method")
+s.frame("alt  switch OFF, above threshold, or risk flag", "c", "pay", f2, s.y + 20); s.y += 30
+s.msg("re", "kf", "refund.completed")
+s.msg("kf", "c", "SMS / push: refund issued", ret=True)
+s.note_over("c", "kf", "The AI never decides eligibility or approves. Money only returns to the original payment method. Switch + threshold live in config/policy.yaml (reviewed PR).", zone="sec")
+save(s, "C6-refund.drawio")
+
 # ---------------- D1 Events & cross-channel ----------------
 s = Sequence("D1 Events", [("or", "Orchestrator", "core"), ("kf", "Kafka", "data"), ("nt", "Notification svc", "core"),
                             ("crm", "CRM sync", "ext"), ("au", "Audit (WORM)", "sec"), ("bi", "Reporting", "obs"), ("cu", "Customer devices", "client")])

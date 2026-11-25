@@ -37,6 +37,7 @@ It is designed for **regulated industries** (financial services, healthcare, tel
 19. [Known trade-offs and open questions](#19-known-trade-offs-and-open-questions)
 20. [Repository layout and regenerating the diagrams](#20-repository-layout-and-regenerating-the-diagrams)
 21. [Tech stack](#21-tech-stack)
+- [Appendix A. Limits, timeouts and budgets](#appendix-a-limits-timeouts-and-budgets)
 
 ---
 
@@ -163,7 +164,7 @@ In Anthropic's terms this is a **workflow, not an autonomous agent**: a routing 
 | Nodes and edges of the graph | Programmer (built from config at startup; the shape never changes at runtime) |
 | Which intents the customer expressed | LLM (Qwen3-8B), constrained to a fixed enum with `response_format` |
 | Whether role and assurance level are sufficient | Code |
-| Which tools a worker calls, and in what order | LLM, limited to that worker's allowlist and `recursion_limit = 8` |
+| Which tools a worker calls, and in what order | LLM, limited to that worker's allowlist and loop caps (4 iterations in chat, 2 on voice; [Appendix A](#appendix-a-limits-timeouts-and-budgets)) |
 | Whether a tool call may execute | Code inside the tool or MCP server (token, scope, acr, ownership) |
 | Time limits, question limits, handoff | Code (`guard`) |
 | Whether a change takes effect | A human approver |
@@ -708,7 +709,7 @@ Defence in depth: any layer can refuse, require step-up, or hand off to a human,
 | Layer | Checks |
 |---|---|
 | 1 · Input | Length (≤ 1,000 characters), rate limits per user and client, PII redaction before the LLM and the logs, injection classifier, uploads scanned (AV + CDR) with only the clean copy used, external text treated as data rather than instructions |
-| 2 · Identity and routing | Token `aud`, `scope` and `acr`; role → reachable agents; assurance level per intent (verify or step-up); tools = agent allowlist ∩ role; `recursion_limit = 8` |
+| 2 · Identity and routing | Token `aud`, `scope` and `acr`; role → reachable agents; assurance level per intent (verify or step-up); tools = agent allowlist ∩ role; loop and token caps ([Appendix A](#appendix-a-limits-timeouts-and-budgets)) |
 | 3 · Retrieval | Filters built from the token (visibility by role, clause version by contract start date, `owner_id`), never from the model |
 | 4 · Tools | Token exchange with a narrow `aud` and `scope`; ownership check plus row-level security; write tools that only create drafts; idempotency keys; quote → confirm → commit for customer-confirmed writes; human approval via `interrupt()`; refunds only to the original payment method, decided by the rules engine; never change phone or bank account |
 | 5 · Output | Citation check (exists, was retrieved, correct version); fast faithfulness check (8B); no binding commitment; disclaimer when terms are discussed; PII leak check; language match; voice answers ≤ 3 sentences |
@@ -1063,3 +1064,120 @@ The diagrams are generated from code so they stay consistent and diffable. You c
 ## 21. Tech stack
 
 LangGraph · LangChain · vLLM · Qwen3 (32B / 8B / 30B-A3B) · Qwen3-Embedding · Qwen3-Reranker · Qwen2.5-VL · Alibaba Cloud Model Studio (Bailian: Qwen, Paraformer, CosyVoice) · FunASR / SenseVoice · CosyVoice · Genesys Cloud CX / Engage (AudioConnector, Architect, Data Actions) · Milvus (dense + BM25) · Postgres · Redis · Kafka · Kubernetes (CPU/GPU pools, KEDA, NVIDIA GPU Operator) · Istio/Linkerd (mTLS) · OIDC IdP (e.g. Keycloak) with token exchange and CIBA · Apigee/Kong · Vault · cert-manager · Argo CD · Langfuse (prompts, datasets, LLM-as-judge, traces) · promptfoo / garak / PyRIT (red team) · ELK · Prometheus/Grafana
+
+---
+
+## Appendix A. Limits, timeouts and budgets
+
+**Single source of truth:** `config/limits.yaml` in Git, validated at startup and pinned per release. This table documents it. Values are **starting points**; the first sprint benchmarks them on the client's hardware or region (trade-off #3).
+
+**Two rules**
+- **Deadlines propagate.** Each request carries a deadline; every downstream call gets the remaining budget. If the remainder can't fit a retry, degrade instead of retrying. Outer budgets are always larger than the sum of the inner ones.
+- **Every limit has a defined outcome**: retry, degrade, re-authenticate or hand off. **A timeout never leads to a fabricated answer.**
+- Limits enforced in code: the orchestrator's `guard` node (counters in state), context assembly (token budgets, trimmed before the call), and the **model gateway as the backstop** (per trace, session and customer). Breaches are metrics; a spike after a release usually means a prompt or model regression. These caps also cover **OWASP LLM10, unbounded consumption** (runaway loops, denial of wallet).
+
+### A.1 Users and sessions
+
+| Item | Value | On breach |
+|---|---|---|
+| Chat idle | Reminder at 15 min, close at 60 min | Session ends; token deleted |
+| Assurance idle expiry | 15 min | Step-up before personal data again |
+| Voice AI handling | 10 min per call | Handoff |
+| Voice silence | Prompt at 8 s, hang up at 16 s; at most 2 reprompts | DTMF menu or human |
+| Questions per call | 5 | Handoff |
+| Message length | 1,000 characters | Rejected with a message; never silently truncated |
+| Chat turns per session | 40 | Offer a human |
+| Concurrent sessions per customer | 2 | Oldest one closed |
+| Messages per user | 20 per minute | Rate-limit message |
+
+### A.2 Identity and tokens
+
+| Item | Value | On breach |
+|---|---|---|
+| OTP | 6 digits, 5 min, single use; locked after 3 failures | Locked for 30 min |
+| OTP sends | 3 per number per 15 min | Refused and alerted (SMS pumping) |
+| App / web access token | 15 min | Silent refresh |
+| Refresh token | Rotated on every use; 7 days idle, 30 days absolute | Sign in again |
+| Voice access token | 10 min, never beyond the call; no refresh token | Re-verify |
+| Exchanged downstream token | 5 min | Exchange again |
+| Step-up freshness | `max_age = 300` s | Step-up again |
+| `confirmation_token` | 5 min, single use | Quote again |
+| `survey_token` | 24 h, single use | Void |
+| JWKS cache | 1 h; refreshed immediately on an unknown `kid` | — |
+| Clock-skew leeway | 60 s | Rejected |
+
+### A.3 Redis and caches
+
+| Item | Value | On breach |
+|---|---|---|
+| Token store | The earlier of token expiry and session end, minus ~30 s | Fail closed; re-authenticate |
+| Account summary, order query results | 5 min; purged by any write tool | Re-read |
+| Entitlements | ≤ 60 s | Re-evaluate |
+| Query embeddings | 30 days; key includes the embedding model version | Recompute |
+| Retrieval results, FAQ answers | 24 h; key includes the KB snapshot | Re-retrieve |
+| Prompt local cache | Refreshed every 60 s; image-baked fallback | Use the fallback |
+
+### A.4 Agent loop
+
+LangGraph's `recursion_limit` counts super-steps of the **whole graph** per invocation; the worker's model ↔ tool loop is capped separately.
+
+| Item | Chat | Voice | On breach |
+|---|---|---|---|
+| Graph `recursion_limit` per turn | 25 | 15 | Stop, log `loop_limit`, hand off |
+| Worker ReAct iterations (model ↔ tool) | 4 | 2 | Answer with what is known, or hand off |
+| Tool calls per turn | 5 | 2 | Same |
+| Parallel tool calls | 3 | 2 | Queued |
+| **Same tool with the same arguments** | 2 | 2 | Treated as a loop; stop at once |
+| Consecutive tool errors | 2 | 1 | Degrade ("can't retrieve that right now") |
+| Workers per turn (multi-intent) | 3 | 1 (one at a time) | Remaining intents next turn |
+| Clarifying questions | 2 | 2 | Handoff |
+| RAG rewrite-and-retry | 1 | 1 | Handoff |
+| Regenerate after an output-guard failure | 1 | 0 (drop the sentence) | Drop the sentence or hand off |
+| Planning steps inside a worker | 5 | Not allowed | Stop |
+
+### A.5 Token and cost budgets
+
+| Scope | Item | Chat | Voice | On breach |
+|---|---|---|---|---|
+| Per LLM call | Input | 16k | 6k | Trimmed during context assembly, never left to the model to fail |
+| | of which retrieved context | ≤ 3k (top-5) | ≤ 1.5k (top-3) | Cut by rerank score |
+| | of which each tool result | ≤ 1.5k | ≤ 800 | Paginate or summarise; summary fields only |
+| | of which history | ≤ 4k | ≤ 2k | Older turns folded into a summary (≤ 500) |
+| | of which long-term memory | ≤ 500 | ≤ 300 | Latest 3 only |
+| | of which skill bodies | ≤ 2k each, 2 per turn | 1 per turn | Further loads refused |
+| | Output `max_tokens` | 800 | 150 | — |
+| | Router / judge output | 50 / 300 | 50 / — | — |
+| | Qwen3 thinking mode | **Off** | **Off** | On only for offline judges and back office, with a 1k thinking budget |
+| Per turn | All calls combined | 30k | 12k | Stop; answer with what is known or hand off |
+| Per session | Cumulative | 200k | 80k | Offer a human; alert |
+| Per customer per day | Cumulative | 1M tokens or 20 sessions | Same | Rate-limited; flagged as possible abuse |
+| Global | Daily budget per channel | Model-gateway quota | Voice has priority | Throttle chat first to protect voice |
+| Cost alert | Cost per conversation, P95 | > 2× baseline | Same | Alert; break down by release and intent |
+
+### A.6 Model, retrieval and tool latency
+
+| Item | Value | On breach |
+|---|---|---|
+| Router (8B) | 1.5 s | Fall back to keyword routing, or ask what the customer needs |
+| Chat generation | First token 2 s; total 30 s | Retry once → smaller model → "can't answer right now" |
+| Voice generation | First token 600 ms | Play a filler and keep waiting; hand off after 3 s |
+| Retrieval + rerank | Voice 300 ms; chat 800 ms | Rewrite and retry once, then hand off |
+| Read API | 2 s; up to 2 retries with exponential backoff | Circuit breaker; "can't retrieve that right now" |
+| Write API | 5 s; one retry **only with an idempotency key** | Check status first; never retry blindly |
+| Archived order history | 8 s | Voice says "one moment" |
+| Circuit breaker | Opens at > 50% errors over 30 s; half-open after 60 s | Degrade |
+| OCR / vision | 20 s | Ask the customer to submit another way |
+| Voice end of speech → first audio | ~1 s (budget in [section 7](#7-channels-voice-vs-chat)) | Filler |
+| vLLM concurrency per channel | Set at the model gateway; capacity reserved for voice | Queue chat |
+| Voice model replicas | Minimum kept warm; never scale to zero | — |
+
+### A.7 Tasks, uploads and retention
+
+| Item | Value | On breach |
+|---|---|---|
+| Approval wait | 7 days | Task expires; customer notified |
+| Resume link after a dropped call (SMS) | 24 h | Start again |
+| Uploads | ≤ 10 MB each, PDFs ≤ 50 pages, 5 per session | Rejected with a message |
+| Checkpoints | 30 days, then archived | — |
+| Long-term memory | 90 days | TTL sweep |
+| Survey invitations | Once per customer per 7 days | Not invited |

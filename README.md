@@ -2,9 +2,13 @@
 
 **English** | [中文](README.zh-CN.md) · [Update history](CHANGELOG.md)
 
-**A vertical-agnostic reference architecture for an AI customer-support agent**, serving customers over **voice (Genesys contact centre)** and **online chat (app, web, WhatsApp)** from one shared core: **LangGraph** agents, **hybrid RAG**, **guardrails**, **evaluation** and **LLMOps**, on **Alibaba Qwen / Tongyi models**. Two deployment profiles:
-- **cloud:** Alibaba Cloud Model Studio (Bailian), Hong Kong region;
+**A vertical-agnostic reference architecture for an AI customer-support agent**, serving customers over **voice (Genesys contact centre)** and **online chat (app, web and messaging apps such as WeChat, WhatsApp and Telegram)** from one shared core: **LangGraph** agents, **hybrid RAG**, **guardrails**, **evaluation** and **LLMOps**, on **Alibaba Qwen / Tongyi models**.
+
+**Region-neutral.** Each deployment picks a **region profile** (cloud region, models, messaging apps, data law), for example WeChat on a mainland China cloud, or WhatsApp and Telegram on a Hong Kong cloud ([section 19](#region-profiles)), and a **hosting profile**:
+- **cloud:** Alibaba Cloud Model Studio (Bailian) in the region profile's region;
 - **on-prem:** open-source models self-hosted on vLLM.
+
+Examples in this document often use the hardest case, Cantonese mixed with English and Hong Kong-style IDs. They illustrate the design; they are not a dependency.
 
 For **local development** (not a deployment profile), engineers run the same model family on a laptop with **Ollama** (Qwen3-8B, quantised) and use **Zvec** as an embedded vector store, so the full agent loop runs offline without a GPU server.
 
@@ -60,7 +64,7 @@ It is designed for **regulated industries** (financial services, healthcare, tel
 
 The two AI channels:
 - **Voice:** customers call in.
-- **Online chat:** app, web and WhatsApp.
+- **Online chat:** app, web and the messaging apps chosen per region (WeChat, WhatsApp, Telegram, …).
 
 Both channels handle five kinds of request:
 
@@ -76,8 +80,8 @@ Both channels handle five kinds of request:
 
 | Area | Requirement |
 |---|---|
-| Data residency | Customer data, recordings and transcripts stay on-prem or in a Hong Kong private cloud (PDPO, sector regulators expectations). No public internet LLM APIs in production; the managed Bailian service is allowed only under the conditions in [section 19](#19-deployment-profiles-cloud-vs-on-prem). |
-| Languages | Cantonese, Mandarin and English, often code-switched within one sentence |
+| Data residency | Customer data, recordings and transcripts stay in the region profile's jurisdiction (on-prem, or a private cloud region there), under that region's data law (e.g. PIPL, PDPO, GDPR). No public internet LLM APIs in production; managed models only in-region and only under the conditions in [section 19](#19-deployment-profiles-cloud-vs-on-prem). |
+| Languages | Per region profile: e.g. Mandarin (mainland China); Cantonese and English, often code-switched within one sentence (Hong Kong) |
 | Volume | About 20k chats per day (400 concurrent at peak) and 6k calls per day (120 concurrent at peak); about 20k documents in the knowledge base |
 | Latency | Voice: roughly 1 second from end of speech to first audio. Chat: first token within 1–2 seconds |
 | Accuracy | Zero binding commitments; per-sentence citations; the version-correct clause must be used |
@@ -375,7 +379,7 @@ The boundaries these tiers enforce are listed in [Appendix A.2](#a2-action-bound
 refund:
   auto_approve:
     enabled: true            # off → every refund goes to human approval
-    max_amount: 1000         # HKD, per refund
+    max_amount: 1000         # per refund, in the region's currency
     max_per_customer_30d: 2
     exclude_risk_flags: [chargeback_history, account_age_lt_30d]
 ```
@@ -457,7 +461,7 @@ A **related-history lookup** runs in parallel with retrieval: same customer, int
 | Low-latency voice (optional) | Qwen3-30B-A3B (MoE, ~3B active parameters) |
 | Embedding / rerank | Qwen3-Embedding / Qwen3-Reranker (0.6B to start; 4B if evals justify it) |
 | Documents | PaddleOCR + Qwen2.5-VL-7B |
-| PII redaction | Rules + NER (e.g. Presidio with HKID recognisers) — no LLM |
+| PII redaction | Rules + NER (e.g. Presidio with national-ID recognisers per region, such as mainland resident ID or HKID) — no LLM |
 
 **How the split is decided.** Run the golden set across 8B, 14B, 32B and 30B-A3B, then choose on quality, latency and GPU cost.
 
@@ -469,7 +473,7 @@ A **related-history lookup** runs in parallel with retrieval: same customer, int
 - Black-box third-party "industry-specific LLMs" are avoided: unknown training data, lock-in, and data-residency risk.
 
 **Deployment.** All LLM and speech calls go through our own model gateway and voice gateway, so the backend can be swapped without changing application code:
-- **cloud profile:** Bailian (Qwen, Paraformer, CosyVoice) or vLLM in the client's Alibaba Cloud Hong Kong VPC;
+- **cloud profile:** Bailian (Qwen, Paraformer, CosyVoice) or vLLM in the client's Alibaba Cloud VPC in that region;
 - **on-prem profile:** the same model families as open weights on vLLM, plus FunASR and CosyVoice;
 - **local development:** Ollama on a laptop serves the same family (Qwen3-8B, quantised) through an OpenAI-compatible API, so application code does not change. This is for development only. Quantisation and the serving stack differ from production (tool-call parsing, structured output, throughput), so release evaluations always run on the production model on vLLM or Bailian.
 
@@ -500,6 +504,28 @@ See [section 19](#19-deployment-profiles-cloud-vs-on-prem).
 - voice requests get priority over chat in the model gateway;
 - the first sentence gets the deterministic rules only (≈ 10 ms); the fast 8B check runs on each later sentence while the previous one is playing;
 - for high-risk intents (eligibility, cases), a filler plays while the whole answer is verified (trade-off 2 in [section 20](#20-known-trade-offs-and-open-questions)).
+
+### Messaging apps: WeChat, WhatsApp, Telegram
+
+The core is region-neutral; each region profile ([section 19](#region-profiles)) picks its messaging apps. All of them plug in through the same **messaging adapter** and use only the platforms' official APIs.
+
+| | WeChat | WhatsApp | Telegram |
+|---|---|---|---|
+| Typical region profile | Mainland China, on a mainland cloud region | Hong Kong and other markets | Hong Kong and other markets |
+| Official API | **WeChat Customer Service** (微信客服) API: callback, then `sync_msg` / `send_msg`; handoff to human reception in WeCom | WhatsApp Business Platform (Cloud API, or a solution provider) | Telegram Bot API |
+| Inbound | Encrypted callback with `msg_signature`; messages pulled with a cursor | Webhook signed with `X-Hub-Signature-256` | Webhook with a secret token |
+| Reply window | Limited after the customer's last message (time and message caps; follow the platform's current rules) | 24 hours free-form; outside it, approved templates only | No window |
+| Channel identity | `external_userid` (and `unionid` where available) | Phone number | Telegram user ID (phone number not shared by default) |
+
+**Rules for every messaging app**
+- **Official APIs only.** No automation of personal accounts (hooked clients, protocol emulation): it breaks the platform terms and gets accounts banned. A personal WeChat user adding a staff member's WeCom account (customer contact) is for human staff only; its APIs don't support real-time automated replies, so the AI uses WeChat Customer Service instead.
+- **Channel identity is not authentication.** A WeChat ID, WhatsApp number or Telegram ID starts the session as *anonymous*. The customer binds the channel **once** by signing in through our IdP on a web page opened from a link card in the chat; the binding service stores channel ID ↔ `customer_id`. Bound sessions get a low assurance level; changes and sensitive data still need step-up in the app or on the web.
+- **Data minimisation.** The platform carries and stores the messages. Replies hold short answers and status only; account details, documents and confirmations go to the app or web ("the details are in your app").
+- **Asynchronous ingress.** The adapter verifies the signature, acknowledges at once, deduplicates by message ID and processes the turn in the background, so platform retries never create duplicate actions.
+- **Handoff** uses the platform's own human reception where it exists (WeChat Customer Service → WeCom), with the same `handoff_id` packet as [section 13](#13-human-handoff-and-agent-console).
+
+![C9 WeChat channel](docs/img/C9-wechat-channel.png)
+*C9 · WeChat channel, mainland China region profile — source: [`C9-wechat-channel.drawio`](docs/diagrams/C9-wechat-channel.drawio)*
 
 ---
 
@@ -831,7 +857,7 @@ An encrypted Redis store holding `auth_ref → access token` is a common, sound 
 **Rules**
 - **Clients never touch Kafka.** The synchronous path (HTTPS / WebSocket / SSE with access tokens) serves the user. Kafka carries asynchronous side effects: notifications, CRM sync, audit, reporting.
 - **Events and links carry IDs, never tokens, credentials or sensitive content.** Kafka uses mTLS or SASL, topic ACLs and encryption.
-- **Not shown in the app:** live transcripts or recording links. Recordings are provided through the PDPO **data access request** process.
+- **Not shown in the app:** live transcripts or recording links. Recordings are provided through the region's **data access request** process (e.g. under PIPL or PDPO).
 - **Concurrency:** an open task for the same intent and account is reused; optimistic locking prevents lost updates.
 
 ---
@@ -982,7 +1008,7 @@ Defence in depth: any layer can refuse, require step-up, or hand off to a human,
 *E2 · Building the golden set — source: [`E2-golden-set.drawio`](docs/diagrams/E2-golden-set.drawio)*
 
 1. **Sources:** chat logs, call transcripts, CRM contact reasons, complaints, escalations, repeat contacts and past bad answers.
-2. **Legal basis first:** compliance approval that the PDPO purpose covers testing; customers pseudonymised; HKID, DOB and account numbers redacted. Start this in week one; it is usually the long pole.
+2. **Legal basis first:** compliance approval that the purpose allowed under the region's data law covers testing; customers pseudonymised; national IDs, DOB and account numbers redacted. Start this in week one; it is usually the long pole.
 3. **Taxonomy:** intent × channel × language × product line × clause version × difficulty.
 4. **Risk-weighted stratified sampling:**
    - a minimum per cell (e.g. ≥ 20 per intent per channel);
@@ -1307,7 +1333,7 @@ All three are correlated by `trace_id`.
 - Report AI-only, AI-then-human and human-only **separately**, so neither side's problems are blamed on the other.
 - Response rates are typically 10–20%, so CSAT is read alongside **implicit signals on 100% of sessions**: handoff rate, **repeat contact on the same intent within 7 days**, abandonment, and judge-scored sentiment (calibrated against real ratings).
 - For canary releases, CSAT is a slow, secondary signal; judges, rules and implicit signals decide.
-- Surveys are optional and don't affect service; responses are retained per PDPO policy.
+- Surveys are optional and don't affect service; responses are retained per the region's data law.
 
 ![C7 CSAT](docs/img/C7-csat.png)
 *C7 · Customer satisfaction, voice and app — source: [`C7-csat.drawio`](docs/diagrams/C7-csat.drawio)*
@@ -1341,11 +1367,27 @@ All three are correlated by `trace_id`.
 ![P1 Deployment profiles](docs/img/P1-deployment-profiles.png)
 *P1 · Deployment profiles — source: [`P1-deployment-profiles.drawio`](docs/diagrams/P1-deployment-profiles.drawio)*
 
-| Layer | Cloud profile (Hong Kong region; data stays in Hong Kong) | On-prem profile (client data centre) |
+### Region profiles
+
+Each deployment picks **one region profile** and **one hosting profile** (below). Region profiles share the code and the release bundle, but never data: customer data, logs, traces and models stay in the region.
+
+| | Mainland China | Hong Kong | Other markets |
+|---|---|---|---|
+| Cloud | Alibaba Cloud mainland region (e.g. Beijing, Shanghai), or on-prem | Alibaba Cloud Hong Kong region, or on-prem | A local region (Alibaba Cloud international regions, or another cloud behind the model gateway), or on-prem |
+| Models | Qwen on Bailian in the mainland, or open weights on vLLM | Bailian (Hong Kong) or vLLM | Bailian international regions where available, or vLLM |
+| Messaging apps | WeChat (Customer Service API) | WhatsApp, Telegram | Local choices (WhatsApp, LINE, Messenger, …) |
+| Data law (examples) | PIPL; filing for public-facing generative AI services; data stays in the mainland | PDPO | GDPR in the EU; local equivalents elsewhere |
+| Languages (examples) | Mandarin | Cantonese and English, often code-switched | Per market |
+
+Adding a region means a new profile: cloud region, model endpoints, channel adapters, language packs and the legal checks. The core doesn't change.
+
+### Hosting profiles: cloud vs on-prem
+
+| Layer | Cloud profile (the region profile's cloud region; data stays in that region) | On-prem profile (client data centre) |
 |---|---|---|
 | Telephony | Genesys Cloud CX: IVR, ACD, AudioConnector, secure DTMF flows | Genesys Engage: SIP / equivalent bot integration, IVR, ACD |
 | Speech | Bailian: Paraformer realtime (STT), CosyVoice (TTS) | Open-source Alibaba Tongyi models, self-hosted: FunASR / SenseVoice, CosyVoice 2 |
-| LLM, embedding, rerank | Bailian Qwen3 / Qwen3-Embedding / Qwen3-Reranker, or vLLM in the client's Alibaba Cloud HK VPC | Qwen3-32B / 8B on vLLM; Qwen3-Embedding / Reranker as open weights |
+| LLM, embedding, rerank | Bailian Qwen3 / Qwen3-Embedding / Qwen3-Reranker, or vLLM in the client's Alibaba Cloud VPC in that region | Qwen3-32B / 8B on vLLM; Qwen3-Embedding / Reranker as open weights |
 | Platform | ACK, ApsaraDB, Redis, Milvus or AnalyticDB vector, OSS, Kafka | On-prem Kubernetes (CPU + GPU pools), Postgres, Redis, Milvus, object storage, Kafka |
 | Connectivity | Private links (Express Connect / VPN) to core systems and the IdP | Internal network; no internet dependency on the voice path |
 
@@ -1354,15 +1396,15 @@ All three are correlated by `trace_id`.
 - Every extra network hop, such as an on-prem gateway calling cloud speech and then an on-prem LLM, adds round trips and failure points and breaks the ~1 s budget.
 
 **Choosing a profile is a week-one decision with the client's compliance and legal teams.** Inputs:
-- data residency and outsourcing / cloud requirements (sector-regulator guidelines, PDPO);
+- data residency and outsourcing / cloud requirements (sector-regulator guidelines; the region's data law, such as PIPL, PDPO or GDPR);
 - contracts: DPA, no training on customer data, retention, sub-processors;
 - the existing estate: Genesys Cloud vs Engage, Alibaba Cloud footprint, GPU capacity;
 - cost: managed APIs (pay per use) vs GPUs (capex, doubled for DR).
 
-This design **assumes the cloud profile keeps all data in Hong Kong**. That must be confirmed contractually for Genesys Cloud and for Alibaba Cloud services and regions.
+This design **assumes the cloud profile keeps all data inside the region profile's jurisdiction**. That must be confirmed contractually for the telephony provider, the messaging platforms, and the Alibaba Cloud services and regions used.
 
-**Cloud profile and "no public LLM APIs".** Bailian is a managed service, so the cloud profile is acceptable only if all of these hold; otherwise the on-prem profile (or vLLM in the client's Alibaba Cloud Hong Kong VPC) is used:
-- Hong Kong region only, reached over a **private VPC endpoint**; egress policy allows only that endpoint ([BND-DAT-07](#a3-data-boundaries));
+**Cloud profile and "no public LLM APIs".** Bailian is a managed service, so the cloud profile is acceptable only if all of these hold; otherwise the on-prem profile (or vLLM in the client's Alibaba Cloud VPC in that region) is used:
+- the region profile's region only (e.g. a mainland region for mainland China, the Hong Kong region for Hong Kong), reached over a **private VPC endpoint**; egress policy allows only that endpoint ([BND-DAT-07](#a3-data-boundaries));
 - the contract states no training on customer data, retention limits and sub-processors;
 - the same model gateway, redaction and tracing apply as on-prem.
 
@@ -1391,7 +1433,7 @@ The cloud profile replaces most of this with Bailian usage costs; the same assum
 | ⭐ 1 | **⭐ User IDs differ across systems** | **The OIDC `sub` (possibly pairwise per client) is not the ID each subsystem uses: CRM, billing, orders and legacy cores each have their own user or account IDs, often one-to-many. This design assumes a shared `customer_no`, which often doesn't hold.** | **Anchor on an enterprise `customer_id` (MDM), linked to `sub` once. An identity-mapping service keeps the cross-reference. The STS writes the target system's ID into each exchanged token per `aud`; legacy systems without OAuth get it via the internal gateway (`X-On-Behalf-Of`). IDs never come from the LLM. No mapping → fail closed and hand off. To be validated with the client's IAM and MDM teams in week one.** |
 | 2 | Voice latency vs verification | Answers must pass citation and compliance checks, but voice streams sentence by sentence. Once spoken, a sentence can't be retracted. | First sentence: deterministic rules only; each later sentence: rules + fast 8B while the previous one plays. For high-risk intents (eligibility, cases), play a short filler and verify the full answer first. Latency is traded for safety where it matters. |
 | 3 | Planning numbers | Latency budget, GPU sizing ([section 19](#rough-gpu-sizing-on-prem-profile-per-site)) and volumes are estimates | First sprint benchmarks speech, vLLM and retrieval on the client's hardware or region and resizes |
-| 4 | Cantonese speech quality | Paraformer, SenseVoice and CosyVoice on domain terms, accents and code-switching are unproven for this domain | Launch chat first; gate voice on CER measured with anonymised real recordings; hotword lists |
+| 4 | Speech quality per language (e.g. Cantonese) | Paraformer, SenseVoice and CosyVoice on domain terms, accents and code-switching are unproven for this domain | Launch chat first; gate voice on CER measured with anonymised real recordings; hotword lists |
 | 5 | Telephony integration | Bot integration capabilities differ between Genesys Cloud (AudioConnector) and Engage | Voice gateway behind an adapter; validate the exact integration in a Genesys test org |
 | 6 | IdP capabilities | Token exchange and CIBA are not supported everywhere | Fallback: an internal token service issuing short-lived JWTs, validated via JWKS |
 | 7 | Scope of phase 1 | The full component set (Kafka, Milvus, mesh, Langfuse) is heavy for an MVP | Phase 1: chat + RAG (pgvector, or Zvec for a read-only KB snapshot), no Kafka; add voice, events and the mesh as volume grows |
@@ -1408,7 +1450,7 @@ docs/diagrams/*.drawio   editable draw.io sources (open in draw.io or the VS Cod
 docs/img/*.png           exported previews used in this README
 tools/drawio_lib.py      tiny generator for component and sequence diagrams
 tools/gen_components.py  A1–A5, R1–R3
-tools/gen_sequences.py   B1–B5, C1–C8, D1–D2
+tools/gen_sequences.py   B1–B5, C1–C9, D1–D2
 tools/gen_state.py       M1–M2, F1
 tools/gen_llmops.py      L1, G1, E1, E2, E3, P1
 ```
@@ -1457,10 +1499,10 @@ Exact versions are pinned in lockfiles, image digests and `models.yaml`, and upg
 | Speech and documents | **FunASR + SenseVoice** | FunASR 1.4.29 · HF `FunAudioLLM/SenseVoiceSmall` | ✅ Stable | On-prem speech-to-text (Cantonese, Mandarin, English) |
 | Speech and documents | **CosyVoice 2** | GitHub v2.0 · HF `FunAudioLLM/CosyVoice2-0.5B` | ✅ Stable | On-prem text-to-speech |
 | Speech and documents | **PaddleOCR** | 3.7.0 | ✅ Stable | Text extraction from scans and photos |
-| Speech and documents | **Presidio** | presidio-analyzer 2.2.366 | ✅ Stable | PII detection and redaction (rules + NER, HKID recognisers), no LLM |
+| Speech and documents | **Presidio** | presidio-analyzer 2.2.366 | ✅ Stable | PII detection and redaction (rules + NER, national-ID recognisers per region), no LLM |
 | Model serving | **vLLM** | 0.33.0 | ✅ Stable · pre-1.0, pinned | Production inference: OpenAI-compatible API, prefix caching, constrained decoding |
 | Model serving | **Ollama** | 0.40.18 (development only, not production) | ✅ Stable · dev only | Local development only: Qwen3-8B (quantised) on a laptop |
-| Model serving | **Alibaba Cloud Model Studio (Bailian)** | Managed service (pin model snapshot names) | Managed service | Cloud profile, Hong Kong region: Qwen, Paraformer realtime (STT), CosyVoice (TTS) |
+| Model serving | **Alibaba Cloud Model Studio (Bailian)** | Managed service (pin model snapshot names) | Managed service | Cloud profile, in the region profile's region: Qwen, Paraformer realtime (STT), CosyVoice (TTS) |
 | Telephony | **Genesys Cloud CX / Engage** | SaaS / vendor-managed | Managed service | IVR, ACD, AudioConnector, Architect flows, Data Actions, secure DTMF |
 | Data | **Milvus** | 3.0.6 (pymilvus 3.0.3) | ✅ Stable | Vector + BM25 (jieba) search, partitions, `kb_live` alias |
 | Data | **Zvec** | 0.8.1 | ✅ Stable · pre-1.0, pinned | Embedded vector store for local development, tests and read-only KB snapshots |
@@ -1551,7 +1593,7 @@ Tiers T0–T3 are defined in [section 4.6](#46-tool-and-api-contracts).
 | BND-DAT-04 | PII never reaches the LLM, logs or traces in clear (the LLM sees placeholders; tools substitute real values); full ID or card numbers are never spoken or displayed | Redaction; output PII check | Redacted or dropped | "Repeat my HKID", exfiltration through formatting or spelling |
 | BND-DAT-05 | System prompt, internal guidelines and other customers' memories are never disclosed | Output guard; RAG visibility filters | Refuse | Prompt extraction; "what did the last caller ask?" |
 | BND-DAT-06 | Long-term memory is read only from the caller's namespace, taken from the token | `Store` namespace | — | Memory bleed between customers |
-| BND-DAT-07 | Data stays in Hong Kong or on-prem; no public internet LLM APIs (Bailian only via a private Hong Kong endpoint, [section 19](#19-deployment-profiles-cloud-vs-on-prem)) | Egress network policy; model gateway | Blocked | Config audit; egress tests |
+| BND-DAT-07 | Data stays in the region profile's jurisdiction or on-prem; no public internet LLM APIs (managed models only in-region, via a private endpoint, [section 19](#19-deployment-profiles-cloud-vs-on-prem)) | Egress network policy; model gateway | Blocked | Config audit; egress tests |
 | BND-DAT-08 | Agents see customer data only for interactions assigned to them; access is revoked 30 min after wrap-up | Console BFF + Genesys assignment | Refused; audited | Opening an unassigned customer; access after wrap-up |
 
 ### A.4 Identity and trust boundaries

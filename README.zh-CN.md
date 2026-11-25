@@ -2,9 +2,13 @@
 
 [English](README.md) | **中文** · [更新记录](CHANGELOG.md)
 
-**一个与行业无关的 AI 客服 agent 参考架构**：用同一套核心同时服务 **语音（Genesys 呼叫中心）** 和 **在线聊天（App、Web、WhatsApp）**，核心包括 **LangGraph** agent、**混合 RAG**、**guardrails（护栏）**、**评估** 和 **LLMOps**，模型统一使用 **阿里通义千问（Qwen）系列**。提供两种部署形态：
-- **云上：** 阿里云百炼（Model Studio），香港 region；
+**一个与行业无关的 AI 客服 agent 参考架构**：用同一套核心同时服务 **语音（Genesys 呼叫中心）** 和 **在线聊天（App、Web，以及微信、WhatsApp、Telegram 等消息应用）**，核心包括 **LangGraph** agent、**混合 RAG**、**guardrails（护栏）**、**评估** 和 **LLMOps**，模型统一使用 **阿里通义千问（Qwen）系列**。
+
+**与区域无关。** 每个部署选一个 **区域形态**（云 region、模型、消息应用、数据法规），例如内地云上的微信，或香港云上的 WhatsApp 和 Telegram（[第 19 节](#区域形态)），再选一个 **托管形态**：
+- **云上：** 阿里云百炼（Model Studio），部署在该区域形态的 region；
 - **本地（on-prem）：** 开源模型，在 vLLM 上自托管。
+
+本文的示例经常用最难的情况：粤语夹英语、香港式的证件号。它们只用来说明设计，不是依赖。
 
 **本地开发**（不是一种部署形态）时，工程师在笔记本上用 **Ollama** 跑同系列模型（Qwen3-8B 量化版），并用 **Zvec** 作为嵌入式向量库，不需要 GPU 服务器就能离线跑通整个 agent 流程。
 
@@ -62,7 +66,7 @@
 
 两个 AI 渠道：
 - **语音：** 客户打电话进来。
-- **在线聊天：** App、Web 和 WhatsApp。
+- **在线聊天：** App、Web，以及按区域选择的消息应用（微信、WhatsApp、Telegram 等）。
 
 两个渠道都处理五类请求：
 
@@ -78,8 +82,8 @@
 
 | 方面 | 要求 |
 |---|---|
-| 数据驻留 | 客户数据、录音和转写文本留在本地或香港私有云（PDPO、行业监管要求）。生产环境不使用公网 LLM API；托管的百炼服务只有满足[第 19 节](#19-部署形态云上与本地)的条件才可使用。 |
-| 语言 | 粤语、普通话和英语，经常在一句话里混用 |
+| 数据驻留 | 客户数据、录音和转写文本留在该区域形态所在的司法辖区（本地部署，或当地的私有云 region），遵守当地数据法规（例如 PIPL、PDPO、GDPR）。生产环境不使用公网 LLM API；托管模型只能在本区域内、并满足[第 19 节](#19-部署形态云上与本地)的条件才可使用。 |
+| 语言 | 按区域形态：例如普通话（中国内地）；粤语和英语，经常在一句话里混用（香港） |
 | 业务量 | 每天约 2 万次聊天（峰值并发 400），每天约 6 千通电话（峰值并发 120）；知识库约 2 万份文档 |
 | 延迟 | 语音：从用户说完到第一段语音约 1 秒。聊天：1–2 秒内出第一个 token |
 | 准确性 | 零约束性承诺；逐句引用；必须使用版本正确的条款 |
@@ -377,7 +381,7 @@ eval_tags: [cancellation]
 refund:
   auto_approve:
     enabled: true            # 关闭 → 所有退款都走人工审批
-    max_amount: 1000         # 港币，单笔
+    max_amount: 1000         # 单笔，按当地货币
     max_per_customer_30d: 2
     exclude_risk_flags: [chargeback_history, account_age_lt_30d]
 ```
@@ -458,7 +462,7 @@ refund:
 | 低延迟语音（可选） | Qwen3-30B-A3B（MoE，约 3B 激活参数） |
 | Embedding / 重排 | Qwen3-Embedding / Qwen3-Reranker（先用 0.6B；评估证明有必要再上 4B） |
 | 文档 | PaddleOCR + Qwen2.5-VL-7B |
-| PII 脱敏 | 规则 + NER（例如带 HKID 识别器的 Presidio）—— 不用 LLM |
+| PII 脱敏 | 规则 + NER（例如 Presidio，按区域配置证件号识别器，如内地居民身份证或 HKID）—— 不用 LLM |
 
 **怎么决定分工。** 用 golden set 跑 8B、14B、32B 和 30B-A3B，按质量、延迟和 GPU 成本选择。
 
@@ -470,7 +474,7 @@ refund:
 - 避免黑盒的第三方"行业大模型"：训练数据不明、被锁定、有数据驻留风险。
 
 **部署。** 所有 LLM 和语音调用都经过我们自己的模型网关和语音网关，所以后端可以替换而不用改应用代码：
-- **云上形态：** 百炼（Qwen、Paraformer、CosyVoice），或客户阿里云香港 VPC 内的 vLLM；
+- **云上形态：** 百炼（Qwen、Paraformer、CosyVoice），或客户在该 region 的阿里云 VPC 内的 vLLM；
 - **本地形态：** 同系列模型的开源权重跑在 vLLM 上，加 FunASR 和 CosyVoice；
 - **本地开发：** 笔记本上用 Ollama 提供同系列模型（Qwen3-8B 量化版），接口兼容 OpenAI，所以应用代码不用改。这只用于开发。量化方式和推理框架都和生产不同（工具调用解析、结构化输出、吞吐），所以发布前的评估一律在 vLLM 或百炼上的生产模型上跑。
 
@@ -501,6 +505,28 @@ refund:
 - 在模型网关里语音请求优先于聊天；
 - 首句只跑确定性规则（约 10 ms）；之后每句在上一句播放的同时跑快速 8B 检查；
 - 高风险意图（资格、工单）先播过渡语，同时校验完整回答（[第 20 节](#20-已知取舍与待定问题)第 2 条取舍）。
+
+### 消息应用：微信、WhatsApp、Telegram
+
+核心与区域无关；每个区域形态（[第 19 节](#区域形态)）自己选择消息应用。所有消息应用都通过同一个 **消息适配器** 接入，只使用平台的官方 API。
+
+| | 微信 | WhatsApp | Telegram |
+|---|---|---|---|
+| 典型区域形态 | 中国内地，部署在内地云 region | 香港及其他市场 | 香港及其他市场 |
+| 官方 API | **微信客服** API：回调后用 `sync_msg` / `send_msg` 收发；转人工到企业微信接待人员 | WhatsApp Business Platform（Cloud API，或通过解决方案服务商） | Telegram Bot API |
+| 消息进来 | 加密回调，校验 `msg_signature`；按游标拉取消息 | 用 `X-Hub-Signature-256` 签名的 webhook | 带 secret token 的 webhook |
+| 回复窗口 | 客户最后一条消息之后有时间和条数限制（以平台当前规则为准） | 24 小时内可自由回复；超过只能发审核过的模板消息 | 没有窗口限制 |
+| 渠道身份 | `external_userid`（有条件时加 `unionid`） | 手机号 | Telegram 用户 ID（默认不提供手机号） |
+
+**所有消息应用的规则**
+- **只用官方 API。** 不做个人号自动化（hook 客户端、模拟协议）：违反平台条款，会被封号。个人微信添加员工的企业微信（客户联系）只给真人员工用；它的 API 不支持实时自动回复，所以 AI 用微信客服。
+- **渠道身份不等于认证。** 微信 ID、WhatsApp 号码或 Telegram ID 一开始都按 *匿名* 处理。客户点聊天里的链接卡片，在网页上通过我们的 IdP 登录 **一次**，完成渠道绑定；绑定服务保存渠道 ID ↔ `customer_id`。绑定后的会话只有较低的身份等级；变更和敏感数据仍要在 App 或网页上 step-up。
+- **数据最少化。** 平台会传输并保存消息。回复只放简短答案和状态；账户详情、文件和确认操作都放到 App 或网页（"详情已发到您的 App"）。
+- **异步接收。** 适配器先验签、立即确认收到、按消息 ID 去重，再在后台处理这一轮，所以平台重发不会造成重复操作。
+- **转人工** 优先用平台自带的人工接待（微信客服 → 企业微信），交接包和[第 13 节](#13-转人工与坐席控制台)一样用 `handoff_id`。
+
+![C9 WeChat channel](docs/img/C9-wechat-channel.png)
+*C9 · 微信渠道，中国内地区域形态 —— 源文件：[`C9-wechat-channel.drawio`](docs/diagrams/C9-wechat-channel.drawio)*
 
 ---
 
@@ -832,7 +858,7 @@ LangMem 还会自己发起 LLM 调用，这会绕过模型网关、prompt 版本
 **规则**
 - **客户端从不直接接触 Kafka。** 同步链路（HTTPS / WebSocket / SSE，带 access token）服务用户。Kafka 承载异步的副作用：通知、CRM 同步、审计、报表。
 - **事件和链接只带 ID，从不带 token、凭证或敏感内容。** Kafka 使用 mTLS 或 SASL、topic ACL 和加密。
-- **App 里不显示：** 实时转写或录音链接。录音通过 PDPO **查阅资料请求** 流程提供。
+- **App 里不显示：** 实时转写或录音链接。录音通过当地的 **查阅资料请求** 流程提供（例如依据 PIPL 或 PDPO）。
 - **并发：** 同一意图和账户的未完成任务会被复用；乐观锁防止更新丢失。
 
 ---
@@ -983,7 +1009,7 @@ LangMem 还会自己发起 LLM 调用，这会绕过模型网关、prompt 版本
 *E2 · 构建 golden set —— 源文件：[`E2-golden-set.drawio`](docs/diagrams/E2-golden-set.drawio)*
 
 1. **来源：** 聊天记录、通话转写、CRM 来电原因、投诉、升级、重复来访和过去的错误回答。
-2. **先确认法律依据：** 合规确认 PDPO 的用途范围涵盖测试；客户做假名化；HKID、出生日期和账号脱敏。第一周就开始做，这通常是最耗时的一环。
+2. **先确认法律依据：** 合规确认当地数据法规允许的用途涵盖测试；客户做假名化；证件号、出生日期和账号脱敏。第一周就开始做，这通常是最耗时的一环。
 3. **分类体系：** 意图 × 渠道 × 语言 × 产品线 × 条款版本 × 难度。
 4. **按风险加权的分层抽样：**
    - 每个格子有最低数量（例如每个意图每个渠道 ≥ 20 条）；
@@ -1308,7 +1334,7 @@ owner: compliance
 - 只有 AI、AI 后转人工、只有人工三类 **分开** 统计，避免把一方的问题算到另一方头上。
 - 提交率通常只有 10–20%，所以 CSAT 要结合 **覆盖 100% 会话的隐性信号** 一起看：转人工率、**7 天内同一意图的重复来访**、中途放弃率，以及 judge 打出的情绪分（用真实评分校准）。
 - 对 canary 版本，CSAT 是一个慢的辅助信号；由 judge、规则和隐性信号做决定。
-- 评分是自愿的，不影响服务；数据按 PDPO 政策保留。
+- 评分是自愿的，不影响服务；数据按当地数据法规保留。
 
 ![C7 CSAT](docs/img/C7-csat.png)
 *C7 · 客户满意度（语音与 App）—— 源文件：[`C7-csat.drawio`](docs/diagrams/C7-csat.drawio)*
@@ -1342,11 +1368,27 @@ owner: compliance
 ![P1 Deployment profiles](docs/img/P1-deployment-profiles.png)
 *P1 · 部署形态 —— 源文件：[`P1-deployment-profiles.drawio`](docs/diagrams/P1-deployment-profiles.drawio)*
 
-| 层 | 云上形态（香港 region；数据留在香港） | 本地形态（客户数据中心） |
+### 区域形态
+
+每个部署选 **一个区域形态** 和 **一个托管形态**（见下）。各区域形态共用代码和发布包，但从不共享数据：客户数据、日志、trace 和模型都留在本区域。
+
+| | 中国内地 | 香港 | 其他市场 |
+|---|---|---|---|
+| 云 | 阿里云内地 region（例如北京、上海），或本地部署 | 阿里云香港 region，或本地部署 | 当地 region（阿里云国际 region，或经模型网关接入的其他云），或本地部署 |
+| 模型 | 内地百炼上的 Qwen，或 vLLM 上的开源权重 | 百炼（香港）或 vLLM | 有条件时用百炼国际 region，或 vLLM |
+| 消息应用 | 微信（微信客服 API） | WhatsApp、Telegram | 当地常用的应用（WhatsApp、LINE、Messenger 等） |
+| 数据法规（示例） | 个人信息保护法（PIPL）；面向公众的生成式 AI 服务需备案；数据留在内地 | PDPO | 欧盟 GDPR；其他地区的对应法规 |
+| 语言（示例） | 普通话 | 粤语和英语，经常混用 | 按市场 |
+
+新增一个区域，就是新增一个区域形态：云 region、模型端点、渠道适配器、语言包和法律审查。核心不变。
+
+### 托管形态：云上 vs 本地
+
+| 层 | 云上形态（该区域形态的云 region；数据留在该 region） | 本地形态（客户数据中心） |
 |---|---|---|
 | 电话系统 | Genesys Cloud CX：IVR、ACD、AudioConnector、安全 DTMF 流程 | Genesys Engage：SIP / 同等的机器人集成、IVR、ACD |
 | 语音 | 百炼：Paraformer 实时版（STT）、CosyVoice（TTS） | 开源的阿里通义模型自托管：FunASR / SenseVoice、CosyVoice 2 |
-| LLM、embedding、重排 | 百炼 Qwen3 / Qwen3-Embedding / Qwen3-Reranker，或客户阿里云香港 VPC 内的 vLLM | vLLM 上的 Qwen3-32B / 8B；Qwen3-Embedding / Reranker 开源权重 |
+| LLM、embedding、重排 | 百炼 Qwen3 / Qwen3-Embedding / Qwen3-Reranker，或客户在该 region 的阿里云 VPC 内的 vLLM | vLLM 上的 Qwen3-32B / 8B；Qwen3-Embedding / Reranker 开源权重 |
 | 平台 | ACK、ApsaraDB、Redis、Milvus 或 AnalyticDB 向量版、OSS、Kafka | 本地 Kubernetes（CPU + GPU 节点池）、Postgres、Redis、Milvus、对象存储、Kafka |
 | 网络连接 | 专线（Express Connect / VPN）连接核心系统和 IdP | 内网；语音链路不依赖互联网 |
 
@@ -1355,15 +1397,15 @@ owner: compliance
 - 每多一跳网络，比如本地网关调云上语音、再调本地 LLM，都会增加往返和故障点，打破约 1 秒的预算。
 
 **选择部署形态是第一周就要和客户合规及法务团队一起做的决定。** 考虑因素：
-- 数据驻留和外包 / 上云要求（行业监管指引、PDPO）；
+- 数据驻留和外包 / 上云要求（行业监管指引；当地数据法规，例如 PIPL、PDPO 或 GDPR）；
 - 合同：DPA、不用客户数据训练、数据保留、分包处理方；
 - 现有环境：Genesys Cloud 还是 Engage、阿里云的使用情况、GPU 容量；
 - 成本：托管 API（按量付费）vs GPU（资本开支，灾备还要翻倍）。
 
-本设计 **假设云上形态的所有数据都留在香港**。这一点必须在合同中与 Genesys Cloud 及阿里云的服务和 region 逐一确认。
+本设计 **假设云上形态的所有数据都留在该区域形态的司法辖区内**。这一点必须在合同中与电话系统供应商、消息平台，以及所用的阿里云服务和 region 逐一确认。
 
-**云上形态与"不使用公网 LLM API"。** 百炼是托管服务，所以只有同时满足以下条件，才能用云上形态；否则用本地形态（或客户阿里云香港 VPC 内的 vLLM）：
-- 只用香港 region，通过 **VPC 私网终端节点** 访问；出口策略只放行这个终端节点（[BND-DAT-07](#a3-数据边界)）；
+**云上形态与"不使用公网 LLM API"。** 百炼是托管服务，所以只有同时满足以下条件，才能用云上形态；否则用本地形态（或客户在该 region 的阿里云 VPC 内的 vLLM）：
+- 只用该区域形态的 region（例如中国内地用内地 region，香港用香港 region），通过 **VPC 私网终端节点** 访问；出口策略只放行这个终端节点（[BND-DAT-07](#a3-数据边界)）；
 - 合同写明不用客户数据训练、保留期限和分包商；
 - 和本地形态一样，经过同一个模型网关、同样的脱敏和 trace。
 
@@ -1392,7 +1434,7 @@ owner: compliance
 | ⭐ 1 | **⭐ 各子系统的用户 ID 不一致** | **OIDC 的 `sub`（可能按 client 是 pairwise 的）并不是各子系统使用的 ID：CRM、计费、订单和老旧核心系统各有自己的用户或账户 ID，而且经常是一对多。本设计默认大家共用同一个 `customer_no`，实际往往不成立。** | **以企业统一的 `customer_id`（MDM）为锚，与 `sub` 关联一次。由身份映射服务维护对照表。STS 在换 token 时按目标 `aud` 写入该系统自己的 ID；不支持 OAuth 的老旧系统由内部网关翻译（`X-On-Behalf-Of`）。ID 永远不来自 LLM。找不到对应关系 → fail closed 并转人工。第一周就要和客户的 IAM 和 MDM 团队确认。** |
 | 2 | 语音延迟 vs 校验 | 回答必须通过引用和合规检查，但语音是逐句流式输出的。一句话说出去就收不回来。 | 首句只跑确定性规则；之后每句在上一句播放时跑规则 + 快速 8B 检查。对高风险意图（资格、工单），先播一句过渡语，校验完整回答后再说。在关键的地方用延迟换安全。 |
 | 3 | 规划数字 | 延迟预算、GPU 规模（[第 19 节](#gpu-规模粗估本地形态每个站点)）和业务量都是估算 | 第一个 sprint 在客户的硬件或 region 上对语音、vLLM 和检索做基准测试，再调整规模 |
-| 4 | 粤语语音质量 | Paraformer、SenseVoice 和 CosyVoice 在行业术语、口音和中英夹杂上的表现，在本领域还没有验证 | 先上线聊天；语音以匿名化真实录音测得的字错率为闸门；热词表 |
+| 4 | 各语言的语音质量（例如粤语） | Paraformer、SenseVoice 和 CosyVoice 在行业术语、口音和中英夹杂上的表现，在本领域还没有验证 | 先上线聊天；语音以匿名化真实录音测得的字错率为闸门；热词表 |
 | 5 | 电话系统集成 | Genesys Cloud（AudioConnector）和 Engage 的机器人集成能力不同 | 语音网关做在适配层后面；在 Genesys 测试组织里验证具体的集成方式 |
 | 6 | IdP 能力 | 不是所有 IdP 都支持 token exchange 和 CIBA | 兜底方案：内部 token 服务签发短期 JWT，通过 JWKS 校验 |
 | 7 | 第一阶段范围 | 完整组件（Kafka、Milvus、service mesh、Langfuse）对 MVP 来说太重 | 第一阶段：聊天 + RAG（pgvector，或用 Zvec 承载只读知识库快照），不用 Kafka；随业务量增长再加语音、事件和 service mesh |
@@ -1409,7 +1451,7 @@ docs/diagrams/*.drawio   可编辑的 draw.io 源文件（用 draw.io 或 VS Cod
 docs/img/*.png           README 中使用的导出图片
 tools/drawio_lib.py      生成组件图和时序图的小工具
 tools/gen_components.py  A1–A5, R1–R3
-tools/gen_sequences.py   B1–B5, C1–C8, D1–D2
+tools/gen_sequences.py   B1–B5, C1–C9, D1–D2
 tools/gen_state.py       M1–M2, F1
 tools/gen_llmops.py      L1, G1, E1, E2, E3, P1
 ```
@@ -1458,10 +1500,10 @@ done
 | 语音与文档 | **FunASR + SenseVoice** | FunASR 1.4.29 · HF `FunAudioLLM/SenseVoiceSmall` | ✅ 稳定版 | 本地语音转文字（粤语、普通话、英语） |
 | 语音与文档 | **CosyVoice 2** | GitHub v2.0 · HF `FunAudioLLM/CosyVoice2-0.5B` | ✅ 稳定版 | 本地文字转语音 |
 | 语音与文档 | **PaddleOCR** | 3.7.0 | ✅ 稳定版 | 从扫描件和照片中提取文字 |
-| 语音与文档 | **Presidio** | presidio-analyzer 2.2.366 | ✅ 稳定版 | PII 检测与脱敏（规则 + NER、HKID 识别器），不用 LLM |
+| 语音与文档 | **Presidio** | presidio-analyzer 2.2.366 | ✅ 稳定版 | PII 检测与脱敏（规则 + NER、按区域的证件号识别器），不用 LLM |
 | 模型服务 | **vLLM** | 0.33.0 | ✅ 稳定版 · 未到 1.0，锁定版本 | 生产推理：OpenAI 兼容接口、前缀缓存、约束解码 |
 | 模型服务 | **Ollama** | 0.40.18 （只用于开发，不用于生产） | ✅ 稳定版 · 只用于开发 | 只用于本地开发：笔记本上跑 Qwen3-8B 量化版 |
-| 模型服务 | **Alibaba Cloud Model Studio (Bailian)** | 托管服务（锁定模型快照名） | 托管服务 | 云上形态，香港 region：Qwen、Paraformer 实时（STT）、CosyVoice（TTS） |
+| 模型服务 | **Alibaba Cloud Model Studio (Bailian)** | 托管服务（锁定模型快照名） | 托管服务 | 云上形态，部署在该区域形态的 region：Qwen、Paraformer 实时（STT）、CosyVoice（TTS） |
 | 电话 | **Genesys Cloud CX / Engage** | SaaS / 厂商托管 | 托管服务 | IVR、ACD、AudioConnector、Architect 流程、Data Actions、安全 DTMF |
 | 数据 | **Milvus** | 3.0.6 (pymilvus 3.0.3) | ✅ 稳定版 | 向量 + BM25（jieba）检索、分区、`kb_live` 别名 |
 | 数据 | **Zvec** | 0.8.1 | ✅ 稳定版 · 未到 1.0，锁定版本 | 嵌入式向量库，用于本地开发、测试和只读知识库快照 |
@@ -1552,7 +1594,7 @@ T0–T3 分级见[第 4.6 节](#46-tool-与-api-契约)。
 | BND-DAT-04 | PII 永不以明文进入 LLM、日志或 trace（LLM 只看到占位符，由工具替换真实值）；完整证件号或卡号永不说出或显示 | 脱敏；输出 PII 检查 | 脱敏或删除 | "复述我的 HKID"、借格式或拼写外泄 |
 | BND-DAT-05 | 永不泄露 system prompt、内部指引或其他客户的记忆 | 输出护栏；RAG 可见性过滤 | 拒绝 | 套取 prompt；"上一个来电的人问了什么？" |
 | BND-DAT-06 | 长期记忆只从来电者自己的命名空间读取，命名空间取自 token | `Store` 命名空间 | — | 客户之间的记忆串扰 |
-| BND-DAT-07 | 数据留在香港或本地；不使用公网 LLM API（百炼只能通过香港私网终端节点访问，见[第 19 节](#19-部署形态云上与本地)） | 出口网络策略；模型网关 | 阻断 | 配置审计；出口测试 |
+| BND-DAT-07 | 数据留在该区域形态的司法辖区内或本地；不使用公网 LLM API（托管模型只能在本区域内、通过私网终端节点访问，见[第 19 节](#19-部署形态云上与本地)） | 出口网络策略；模型网关 | 阻断 | 配置审计；出口测试 |
 | BND-DAT-08 | 坐席只能看分配给自己的交互中的客户数据；收尾后 30 分钟收回 | 控制台 BFF + Genesys 分配关系 | 拒绝；审计 | 打开未分配的客户；收尾后继续访问 |
 
 ### A.4 身份与信任边界

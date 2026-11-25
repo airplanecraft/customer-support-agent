@@ -8,6 +8,22 @@ Newest first. Each entry is written in English and Chinese. Diagram IDs refer to
 
 ---
 
+## v1.14 — 2026-11-25
+
+**English**
+- **Region-neutral design.** Each deployment picks a **region profile** (cloud region, models, messaging apps, data law) and a hosting profile (cloud or on-prem). New table in section 19: mainland China (WeChat, mainland cloud, PIPL and generative AI filing), Hong Kong (WhatsApp, Telegram, Hong Kong cloud, PDPO), other markets (local channels and regions). Hong Kong is now an example, not an assumption: data residency, languages, PII recognisers, data access requests, retention, currency, BND-DAT-07 and the Bailian conditions are all per region.
+- New **messaging apps** subsection in section 7: WeChat Customer Service API, WhatsApp Business Platform and Telegram Bot API compared; rules for official APIs only, channel binding once through our IdP, data minimisation, asynchronous ingress and platform handoff.
+- New diagram **C9 · WeChat channel** (mainland region profile): callback and `sync_msg`, anonymous first answer, one-time binding, bound customer with minimal data, handoff to WeCom reception.
+- A2 adds the messaging-apps channel and webhooks through the external API gateway; P1 and sequence examples no longer assume Hong Kong or HKD.
+
+**中文**
+- **与区域无关的设计。** 每个部署选一个 **区域形态**（云 region、模型、消息应用、数据法规）和一个托管形态（云上或本地）。第 19 节新增表格：中国内地（微信、内地云、PIPL 和生成式 AI 备案）、香港（WhatsApp、Telegram、香港云、PDPO）、其他市场（当地渠道和 region）。香港现在只是示例，不再是前提：数据驻留、语言、PII 识别器、查阅资料请求、保留期、货币、BND-DAT-07 和使用百炼的条件都按区域配置。
+- 第 7 节新增 **消息应用** 小节：对比微信客服 API、WhatsApp Business Platform 和 Telegram Bot API；规定只用官方 API、通过我们的 IdP 绑定一次渠道、数据最少化、异步接收、用平台自带的转人工。
+- 新图 **C9 · 微信渠道**（内地区域形态）：回调和 `sync_msg`、匿名的首次回答、一次性绑定、绑定后只给最少数据、转企业微信人工接待。
+- A2 新增消息应用渠道，webhook 经外部 API 网关进入；P1 和时序图示例不再默认香港或港币。
+
+---
+
 ## v1.13 — 2026-11-25
 
 **English**

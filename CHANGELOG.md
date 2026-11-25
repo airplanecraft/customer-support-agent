@@ -8,6 +8,24 @@ Newest first. Each entry is written in English and Chinese. Diagram IDs refer to
 
 ---
 
+## v1.1 — 2026-11-25
+
+**English**
+- Appendix A renamed from "Limits, timeouts and budgets" to **System boundaries**: what the AI may do, see and trust, and how far it may go.
+- New boundary lists with IDs, enforcement point, behaviour on crossing and red-team tests: A.1 scope (`BND-SCP`), A.2 actions (`BND-ACT`), A.3 data (`BND-DAT`), A.4 identity and trust (`BND-TRS`).
+- Former limit tables moved under A.5 operational boundaries (`BND-OPS-1…7`), unchanged.
+- Gates: A.1–A.4 zero tolerance; at least 5 boundary-suite cases per boundary; every test and red-team finding tagged with a boundary ID.
+- Section 14.4 now takes its targets from Appendix A; section 4.6 links to A.2.
+
+**中文**
+- 附录 A 从"限制超时与预算"改名为 **系统边界**：AI 能做什么、能看到什么、信任谁、最多能做到什么程度。
+- 新增带 ID 的边界清单，每条写明执行位置、越界后的处理和红队测试：A.1 业务范围（`BND-SCP`）、A.2 操作（`BND-ACT`）、A.3 数据（`BND-DAT`）、A.4 身份与信任（`BND-TRS`）。
+- 原来的限制表移到 A.5 运行边界（`BND-OPS-1…7`），内容不变。
+- 闸门：A.1–A.4 零容忍；每条边界在边界测试集里至少 5 个用例；每个测试和红队发现都标注边界 ID。
+- 第 14.4 节的测试目标改为来自附录 A；第 4.6 节链接到 A.2。
+
+---
+
 ## v1.0 — 2026-11-25
 
 Baseline. History starts here; earlier work is folded into this version.

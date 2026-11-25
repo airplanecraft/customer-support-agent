@@ -1022,15 +1022,16 @@ owner: compliance
 
 | # | 主题 | 取舍或待定问题 | 采取的立场 |
 |---|---|---|---|
-| 1 | 语音延迟 vs 校验 | 回答必须通过引用和合规检查，但语音是逐句流式输出的。一句话说出去就收不回来。 | 每句话合成语音前做逐句检查（规则 + 快速 8B）。对高风险意图（资格、工单），先播一句过渡语，校验完整回答后再说。在关键的地方用延迟换安全。 |
-| 2 | 规划数字 | 延迟预算、GPU 规模和业务量都是估算 | 第一个 sprint 在客户的硬件或 region 上对语音、vLLM 和检索做基准测试，再调整规模 |
-| 3 | 粤语语音质量 | Paraformer、SenseVoice 和 CosyVoice 在行业术语、口音和中英夹杂上的表现，在本领域还没有验证 | 先上线聊天；语音以匿名化真实录音测得的字错率为闸门；热词表 |
-| 4 | 电话系统集成 | Genesys Cloud（AudioConnector）和 Engage 的机器人集成能力不同 | 语音网关做在适配层后面；在 Genesys 测试组织里验证具体的集成方式 |
-| 5 | IdP 能力 | 不是所有 IdP 都支持 token exchange 和 CIBA | 兜底方案：内部 token 服务签发短期 JWT，通过 JWKS 校验 |
-| 6 | 第一阶段范围 | 完整组件（Kafka、Milvus、service mesh、Langfuse）对 MVP 来说太重 | 第一阶段：聊天 + RAG（pgvector），不用 Kafka；随业务量增长再加语音、事件和 service mesh |
-| 7 | 成本与灾备 | GPU 灾备会让硬件翻倍；托管 API 把成本转成按量计费 | 每种形态做成本模型；GPU 灾备用温备，降级时转人工 |
-| 8 | Trace 里的 PII | Langfuse trace 包含对话内容 | Trace 前先脱敏；加密、保留期和访问控制；原始归档只有合规能访问 |
-| 9 | LLM-as-judge 的可靠性 | Judge 会漂移，也可能和人的判断不一致 | 校准（κ ≥ 0.8），每月复查，每次发布比较时锁定 judge 版本 |
+| ⭐ 1 | **⭐ 各子系统的用户 ID 不一致** | **OIDC 的 `sub`（可能按 client 是 pairwise 的）并不是各子系统使用的 ID：CRM、计费、订单和老旧核心系统各有自己的用户或账户 ID，而且经常是一对多。本设计默认大家共用同一个 `customer_no`，实际往往不成立。** | **以企业统一的 `customer_id`（MDM）为锚，与 `sub` 关联一次。由身份映射服务维护对照表。STS 在换 token 时按目标 `aud` 写入该系统自己的 ID；不支持 OAuth 的老旧系统由内部网关翻译（`X-On-Behalf-Of`）。ID 永远不来自 LLM。找不到对应关系 → fail closed 并转人工。第一周就要和客户的 IAM 和 MDM 团队确认。** |
+| 2 | 语音延迟 vs 校验 | 回答必须通过引用和合规检查，但语音是逐句流式输出的。一句话说出去就收不回来。 | 每句话合成语音前做逐句检查（规则 + 快速 8B）。对高风险意图（资格、工单），先播一句过渡语，校验完整回答后再说。在关键的地方用延迟换安全。 |
+| 3 | 规划数字 | 延迟预算、GPU 规模和业务量都是估算 | 第一个 sprint 在客户的硬件或 region 上对语音、vLLM 和检索做基准测试，再调整规模 |
+| 4 | 粤语语音质量 | Paraformer、SenseVoice 和 CosyVoice 在行业术语、口音和中英夹杂上的表现，在本领域还没有验证 | 先上线聊天；语音以匿名化真实录音测得的字错率为闸门；热词表 |
+| 5 | 电话系统集成 | Genesys Cloud（AudioConnector）和 Engage 的机器人集成能力不同 | 语音网关做在适配层后面；在 Genesys 测试组织里验证具体的集成方式 |
+| 6 | IdP 能力 | 不是所有 IdP 都支持 token exchange 和 CIBA | 兜底方案：内部 token 服务签发短期 JWT，通过 JWKS 校验 |
+| 7 | 第一阶段范围 | 完整组件（Kafka、Milvus、service mesh、Langfuse）对 MVP 来说太重 | 第一阶段：聊天 + RAG（pgvector），不用 Kafka；随业务量增长再加语音、事件和 service mesh |
+| 8 | 成本与灾备 | GPU 灾备会让硬件翻倍；托管 API 把成本转成按量计费 | 每种形态做成本模型；GPU 灾备用温备，降级时转人工 |
+| 9 | Trace 里的 PII | Langfuse trace 包含对话内容 | Trace 前先脱敏；加密、保留期和访问控制；原始归档只有合规能访问 |
+| 10 | LLM-as-judge 的可靠性 | Judge 会漂移，也可能和人的判断不一致 | 校准（κ ≥ 0.8），每月复查，每次发布比较时锁定 judge 版本 |
 
 ---
 

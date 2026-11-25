@@ -1021,15 +1021,16 @@ This design **assumes the cloud profile keeps all data in Hong Kong**. That must
 
 | # | Topic | Trade-off or open question | Position taken |
 |---|---|---|---|
-| 1 | Voice latency vs verification | Answers must pass citation and compliance checks, but voice streams sentence by sentence. Once spoken, a sentence can't be retracted. | Per-sentence checks (rules + fast 8B) before each sentence is synthesised. For high-risk intents (eligibility, cases), play a short filler and verify the full answer first. Latency is traded for safety where it matters. |
-| 2 | Planning numbers | Latency budget, GPU sizing and volumes are estimates | First sprint benchmarks speech, vLLM and retrieval on the client's hardware or region and resizes |
-| 3 | Cantonese speech quality | Paraformer, SenseVoice and CosyVoice on domain terms, accents and code-switching are unproven for this domain | Launch chat first; gate voice on CER measured with anonymised real recordings; hotword lists |
-| 4 | Telephony integration | Bot integration capabilities differ between Genesys Cloud (AudioConnector) and Engage | Voice gateway behind an adapter; validate the exact integration in a Genesys test org |
-| 5 | IdP capabilities | Token exchange and CIBA are not supported everywhere | Fallback: an internal token service issuing short-lived JWTs, validated via JWKS |
-| 6 | Scope of phase 1 | The full component set (Kafka, Milvus, mesh, Langfuse) is heavy for an MVP | Phase 1: chat + RAG (pgvector), no Kafka; add voice, events and the mesh as volume grows |
-| 7 | Cost and DR | GPU DR doubles hardware; managed APIs shift cost to usage | Cost model per profile; GPU DR as warm standby with human-handoff degradation |
-| 8 | PII in traces | Langfuse traces contain conversation content | Redact before tracing; encryption, retention and access control; compliance-only access to raw archives |
-| 9 | LLM-as-judge reliability | Judges drift and can disagree with humans | Calibrate (κ ≥ 0.8), re-check monthly, pin judge versions per release comparison |
+| ⭐ 1 | **⭐ User IDs differ across systems** | **The OIDC `sub` (possibly pairwise per client) is not the ID each subsystem uses: CRM, billing, orders and legacy cores each have their own user or account IDs, often one-to-many. This design assumes a shared `customer_no`, which often doesn't hold.** | **Anchor on an enterprise `customer_id` (MDM), linked to `sub` once. An identity-mapping service keeps the cross-reference. The STS writes the target system's ID into each exchanged token per `aud`; legacy systems without OAuth get it via the internal gateway (`X-On-Behalf-Of`). IDs never come from the LLM. No mapping → fail closed and hand off. To be validated with the client's IAM and MDM teams in week one.** |
+| 2 | Voice latency vs verification | Answers must pass citation and compliance checks, but voice streams sentence by sentence. Once spoken, a sentence can't be retracted. | Per-sentence checks (rules + fast 8B) before each sentence is synthesised. For high-risk intents (eligibility, cases), play a short filler and verify the full answer first. Latency is traded for safety where it matters. |
+| 3 | Planning numbers | Latency budget, GPU sizing and volumes are estimates | First sprint benchmarks speech, vLLM and retrieval on the client's hardware or region and resizes |
+| 4 | Cantonese speech quality | Paraformer, SenseVoice and CosyVoice on domain terms, accents and code-switching are unproven for this domain | Launch chat first; gate voice on CER measured with anonymised real recordings; hotword lists |
+| 5 | Telephony integration | Bot integration capabilities differ between Genesys Cloud (AudioConnector) and Engage | Voice gateway behind an adapter; validate the exact integration in a Genesys test org |
+| 6 | IdP capabilities | Token exchange and CIBA are not supported everywhere | Fallback: an internal token service issuing short-lived JWTs, validated via JWKS |
+| 7 | Scope of phase 1 | The full component set (Kafka, Milvus, mesh, Langfuse) is heavy for an MVP | Phase 1: chat + RAG (pgvector), no Kafka; add voice, events and the mesh as volume grows |
+| 8 | Cost and DR | GPU DR doubles hardware; managed APIs shift cost to usage | Cost model per profile; GPU DR as warm standby with human-handoff degradation |
+| 9 | PII in traces | Langfuse traces contain conversation content | Redact before tracing; encryption, retention and access control; compliance-only access to raw archives |
+| 10 | LLM-as-judge reliability | Judges drift and can disagree with humans | Calibrate (κ ≥ 0.8), re-check monthly, pin judge versions per release comparison |
 
 ---
 

@@ -8,6 +8,28 @@ Newest first. Each entry is written in English and Chinese. Diagram IDs refer to
 
 ---
 
+## v1.9 — 2026-11-25
+
+**English**
+- **4.4 Skills rewritten: one folder per agent** (`skills/<agent>/<skill>/SKILL.md`, plus `_shared/`). A worker can load only its own skills and the shared ones listed for it, enforced in code like the tool allowlist.
+- Skill catalogue per agent (12 skills), with who loads each one (model or router); compliance-critical skills (`profile_change`, `address_change`, `cancellation`, `refund_request`, `vulnerable_customer`) are loaded by the router.
+- `SKILL.md` format: front matter checked at startup (agent, version, owner, compliance review, channels, assurance, tools, eval tags) and a procedure body (when to use, steps, never, hand off, voice).
+- Skill lifecycle: owner and compliance review, CI front-matter checks, tagged golden-set cases, versions pinned in the release manifest and recorded in traces.
+- 4.2 workers table: new skills `fee_explain`, `billing_explain`, `refund_request`.
+- Components table: MCP servers explained (the tool layer; one mTLS client certificate per server so the internal gateway limits each to its own APIs); Order MCP added.
+- Diagrams: A2 and A3 add the missing Order MCP (A3 also Identity MCP); A4 adds `order_agent` and the new skills.
+
+**中文**
+- **重写 4.4 Skills：每个 agent 一个文件夹**（`skills/<agent>/<skill>/SKILL.md`，另有 `_shared/`）。Worker 只能加载自己的 skill 和为它列出的共享 skill，像工具白名单一样由代码强制执行。
+- 按 agent 列出 skill 清单（12 个），并标明由谁加载（模型或路由器）；合规关键的 skill（`profile_change`、`address_change`、`cancellation`、`refund_request`、`vulnerable_customer`）由路由器加载。
+- `SKILL.md` 格式：启动时校验的 front matter（agent、版本、负责人、合规审阅、渠道、身份等级、工具、评估标签）和流程正文（适用场景、步骤、禁止事项、转人工、语音）。
+- Skill 生命周期：负责人和合规审阅、CI 校验 front matter、带标签的 golden set 用例、版本锁定在发布清单并记录在 trace 中。
+- 4.2 worker 表：新增 `fee_explain`、`billing_explain`、`refund_request`。
+- 组件表：解释 MCP server（工具层；每个 server 一张 mTLS 客户端证书，内部网关只允许它访问自己的 API）；补上订单 MCP。
+- 图：A2 和 A3 补上缺失的订单 MCP（A3 还补上身份 MCP）；A4 加入 `order_agent` 和新 skill。
+
+---
+
 ## v1.8 — 2026-11-25
 
 **English**

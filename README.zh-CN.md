@@ -108,7 +108,7 @@
 | **Token store** | `auth_ref → token`，加密存于 Redis，带 TTL；token 永不进入 agent state |
 | **编排器** | LangGraph 路由与 worker、Postgres checkpoint、为下游调用做 token exchange |
 | **RAG 服务** | 查询改写、混合检索、重排、引用校验 |
-| **MCP server** | 账户、工单、变更（仅草稿）和身份工具；每个都有自己的客户端证书 |
+| **MCP server** | Agent 和业务系统之间的工具层：账户、工单、订单、变更（仅草稿）和身份工具。LLM 只能看到这些工具，永远看不到原始 API（[4.6](#46-tool-与-api-契约)）。每个 server 有 **自己的 mTLS 客户端证书**，内部网关因此知道是哪个 server 在调用，只允许它访问自己的 API（例如变更 server 能建草稿，但不能读订单）。 |
 | **模型网关** | 模型路由、配额、按渠道和功能统计成本 |
 | **审批服务** | 员工审批，职责分离；恢复暂停中的 graph |
 | **通知服务** | 通话后发消息到聊天线程、推送通知或短信 |
@@ -190,11 +190,11 @@
 
 | Worker | 模型 | 工具 | Skills | 最低认证等级 |
 |---|---|---|---|---|
-| `clause_agent` | Qwen3-32B | `search_clauses`, `get_fee_table` | `clause_explain` | 匿名 |
-| `account_agent` | Qwen3-8B | `get_accounts`, `get_account_detail`, `get_billing_history` | — | 已核验 |
+| `clause_agent` | Qwen3-32B | `search_clauses`, `get_fee_table` | `clause_explain`, `fee_explain` | 匿名 |
+| `account_agent` | Qwen3-8B | `get_accounts`, `get_account_detail`, `get_billing_history` | `billing_explain` | 已核验 |
 | `case_agent` | Qwen3-32B | `get_case_status`, `list_required_documents` | `case_guide`, `document_checklist` | 已核验 |
 | `service_agent` | Qwen3-32B | `create_change_draft`（**仅草稿**） | `profile_change`, `address_change`, `cancellation` | 已核验 + step-up |
-| `order_agent` | Qwen3-32B | `list_orders`, `search_order_history`, `get_order`, `get_spend_summary`, `track_shipment`, `quote_order`, `place_order`, `cancel_order`, `check_refund_eligibility`, `request_refund`, `get_refund_status`, `search_policy` | `order_lookup`, `returns_guide` | 已核验；写操作需要明确确认 |
+| `order_agent` | Qwen3-32B | `list_orders`, `search_order_history`, `get_order`, `get_spend_summary`, `track_shipment`, `quote_order`, `place_order`, `cancel_order`, `check_refund_eligibility`, `request_refund`, `get_refund_status`, `search_policy` | `order_lookup`, `returns_guide`, `refund_request` | 已核验；写操作需要明确确认 |
 
 ### 4.3 配置写在代码里，不写在 prompt 里
 
@@ -203,16 +203,94 @@
 - 两者都 **在 Git 里做版本管理、启动时校验、每次发布打进不可变镜像**，只能通过评审过的 PR 修改（权限变更需安全和合规审批）。
 - **Prompt 解释 *什么时候* 用某个工具；绑定关系决定模型 *能不能看到* 它。** 实际可用工具 = agent 白名单 ∩ 角色权限。
 
-### 4.4 Skills（按需加载）
+### 4.4 Skills：每个 agent 一个文件夹
 
-Skill 是打包好的指令：一个文件夹，含 `SKILL.md` 和可选的参考文件。与 agent 是多对多关系。
+Skill 是针对某一类请求写好的处理流程：什么时候适用、步骤、该说什么、绝对不能做什么、什么时候转人工。Prompt 说明 *agent 是谁*；工具说明 *它能做什么*；skill 说明 *具体情况怎么处理*。业务和合规团队可以直接把 skill 当文档审阅，不用看代码。
 
-渐进式加载：
-1. System prompt 里只放每个 skill 的名称和描述。
-2. 模型判断需要时，通过 `load_skill` 工具调用拿到正文。
-3. 参考文件之后通过 `read_skill_file` 读取，带路径穿越检查。
+**每个 worker 有自己的 skill。** Worker 只能加载自己文件夹里的 skill，以及 `config/agents.yaml` 里为它列出的共享 skill。和工具白名单一样，由代码强制执行。
 
-**合规关键的流程由路由器确定性加载**，不交给模型决定。必须始终生效的规则（例如免责声明）留在 system prompt 里。
+```
+skills/
+  clause_agent/
+    clause_explain/SKILL.md
+    fee_explain/SKILL.md
+  account_agent/
+    billing_explain/SKILL.md
+  case_agent/
+    case_guide/SKILL.md
+    document_checklist/SKILL.md
+      references/required_documents.yaml
+  service_agent/
+    profile_change/SKILL.md
+    address_change/SKILL.md
+    cancellation/SKILL.md
+      references/retention_offers.md
+  order_agent/
+    order_lookup/SKILL.md
+    returns_guide/SKILL.md
+    refund_request/SKILL.md
+  _shared/
+    vulnerable_customer/SKILL.md
+```
+
+Skill 属于 **行业包**：换一个行业时替换这些文件夹，核心不变。
+
+| Agent | Skill | 内容 | 由谁加载 |
+|---|---|---|---|
+| `clause_agent` | `clause_explain` | 用通俗语言解释条款，每句一个引用，不做约束性承诺 | 模型 |
+| | `fee_explain` | 按客户的套餐和版本读取费用表，给出计算过程 | 模型 |
+| `account_agent` | `billing_explain` | 账单为什么变了：对比两个账期，列出变化的项目 | 模型 |
+| `case_agent` | `case_guide` | 每个工单状态的含义、下一步、预计时间 | 模型 |
+| | `document_checklist` | 这类工单还缺哪些文件、怎么上传 | 模型 |
+| `service_agent` | `profile_change` | 联系方式变更做成草稿，提交前复述确认 | **路由器** |
+| | `address_change` | 地址变更做成草稿，地址证明的要求 | **路由器** |
+| | `cancellation` | 必须告知的事项、冷静期规则、最多一次挽留，然后生成草稿 | **路由器** |
+| `order_agent` | `order_lookup` | 根据模糊描述（日期、商品、金额）找到正确的订单 | 模型 |
+| | `returns_guide` | 按商品类别说明退货条件和步骤 | 模型 |
+| | `refund_request` | 报价 → 确认 → 提交；超过阈值则生成草稿等待审批 | **路由器** |
+| 共享 | `vulnerable_customer` | 发现情绪困扰或弱势迹象 → 语气温和、不推销、主动提供人工 | 路由器（情绪或关键词触发） |
+
+**SKILL.md 格式。** Front matter 是启动时由代码校验的元数据；正文是处理流程。
+
+```markdown
+---
+name: cancellation
+description: Cancel a plan or account. Use when the customer asks to cancel or close.
+agent: service_agent
+version: 1.4.0
+owner: retention-team
+compliance_review: CR-2026-031
+channels: [chat, voice]
+min_assurance: verified+step_up
+tools: [create_change_draft]
+eval_tags: [cancellation]
+---
+## When to use
+## Steps
+1. Read back the plan and contract end date.
+2. State the mandatory disclosures (references/disclosures.md).
+3. Make at most one retention offer; do not repeat it after a no.
+4. Create the cancellation draft; tell the customer it needs approval.
+## Never
+- Promise a refund amount or a date.
+## Hand off when
+- The customer disputes a charge, or mentions hardship.
+## Voice
+- At most 2 sentences per turn; confirm with yes or no.
+```
+
+**加载方式。**
+1. System prompt 里只列出该 worker 的 skill 名称和描述。
+2. 模型需要时调用 `load_skill(name)`。不在该 worker 白名单里的名称会被拒绝。
+3. 参考文件通过 `read_skill_file` 读取，带路径穿越检查。
+4. **合规关键的 skill 由路由器在 worker 运行前加载**（上表标为"路由器"），所以流程不会被跳过。
+5. 预算：每个 skill 正文最多 2k token；聊天每轮最多加载 2 个，语音每轮最多 1 个（[附录 A](#附录-a-系统边界)）。
+
+**生命周期。** 和 prompt 走同一条路径（[第 16 节](#16-llmops-git-流水线与-langfuse)）：
+- Git pull request 由 skill 负责人审阅，带 `compliance_review` 的还要合规审阅；
+- CI 校验 front matter（agent 存在、工具在该 agent 的白名单里、身份等级有效）；
+- 打了该 skill `eval_tags` 的 golden set 用例必须通过才能合并；
+- 发布清单锁定每个 skill 的版本，Langfuse trace 记录加载了哪些 skill 和版本。
 
 ### 4.5 一次 LLM 调用包含什么
 

@@ -106,7 +106,7 @@ Both channels handle five kinds of request:
 | **Token store** | `auth_ref → token`, encrypted in Redis with a TTL; tokens never enter agent state |
 | **Orchestrator** | LangGraph router and workers, Postgres checkpoints, token exchange for downstream calls |
 | **RAG service** | Query rewriting, hybrid search, reranking, citation verification |
-| **MCP servers** | Account, case, change (drafts only) and identity tools; each has its own client certificate |
+| **MCP servers** | The tool layer between the agents and the systems of record: account, case, order, change (drafts only) and identity tools. The LLM only ever sees these tools, never the raw APIs ([4.6](#46-tool-and-api-contracts)). Each server has **its own mTLS client certificate**, so the internal gateway knows which server is calling and lets it reach only its own APIs (for example, the change server can create drafts but cannot read orders). |
 | **Model gateway** | Model routing, quotas, cost attribution per channel and feature |
 | **Approval service** | Staff approvals with separation of duties; resumes paused graphs |
 | **Notification service** | Post-call message to the chat thread, as a push notification, or by SMS |
@@ -188,11 +188,11 @@ In Anthropic's terms this is a **workflow, not an autonomous agent**: a routing 
 
 | Worker | Model | Tools | Skills | Minimum assurance |
 |---|---|---|---|---|
-| `clause_agent` | Qwen3-32B | `search_clauses`, `get_fee_table` | `clause_explain` | anonymous |
-| `account_agent` | Qwen3-8B | `get_accounts`, `get_account_detail`, `get_billing_history` | — | verified |
+| `clause_agent` | Qwen3-32B | `search_clauses`, `get_fee_table` | `clause_explain`, `fee_explain` | anonymous |
+| `account_agent` | Qwen3-8B | `get_accounts`, `get_account_detail`, `get_billing_history` | `billing_explain` | verified |
 | `case_agent` | Qwen3-32B | `get_case_status`, `list_required_documents` | `case_guide`, `document_checklist` | verified |
 | `service_agent` | Qwen3-32B | `create_change_draft` (**draft only**) | `profile_change`, `address_change`, `cancellation` | verified + step-up |
-| `order_agent` | Qwen3-32B | `list_orders`, `search_order_history`, `get_order`, `get_spend_summary`, `track_shipment`, `quote_order`, `place_order`, `cancel_order`, `check_refund_eligibility`, `request_refund`, `get_refund_status`, `search_policy` | `order_lookup`, `returns_guide` | verified; writes need explicit confirmation |
+| `order_agent` | Qwen3-32B | `list_orders`, `search_order_history`, `get_order`, `get_spend_summary`, `track_shipment`, `quote_order`, `place_order`, `cancel_order`, `check_refund_eligibility`, `request_refund`, `get_refund_status`, `search_policy` | `order_lookup`, `returns_guide`, `refund_request` | verified; writes need explicit confirmation |
 
 ### 4.3 Configuration lives in code, not in prompts
 
@@ -201,16 +201,94 @@ In Anthropic's terms this is a **workflow, not an autonomous agent**: a routing 
 - Both are **versioned in Git, validated at startup, baked into an immutable image per release**, and changed only through reviewed pull requests (security and compliance approve permission changes).
 - **The prompt explains *when* to use a tool; the binding decides *whether* the model can see it.** Effective tools = agent allowlist ∩ role permissions.
 
-### 4.4 Skills (loaded on demand)
+### 4.4 Skills: one folder per agent
 
-Skills are packaged instructions: a folder with a `SKILL.md` plus optional reference files. They are many-to-many with agents.
+A skill is a written procedure for one kind of request: when it applies, the steps, what to say, what never to do and when to hand off. Prompts say *who the agent is*; tools say *what it can do*; skills say *how to handle a specific case*. Business and compliance teams can review a skill as a document without reading code.
 
-Progressive loading:
-1. Only each skill's name and description sit in the system prompt.
-2. The body arrives through a `load_skill` tool call when the model decides it needs it.
-3. Reference files are read later through `read_skill_file`, with path-traversal checks.
+**Each worker owns its own skills.** A worker can load only the skills in its own folder, plus shared skills listed for it in `config/agents.yaml`. Code enforces this, the same way as the tool allowlist.
 
-**Compliance-critical flows are loaded deterministically by the router**, not left to the model. Rules that must always apply, such as disclaimers, stay in the system prompt.
+```
+skills/
+  clause_agent/
+    clause_explain/SKILL.md
+    fee_explain/SKILL.md
+  account_agent/
+    billing_explain/SKILL.md
+  case_agent/
+    case_guide/SKILL.md
+    document_checklist/SKILL.md
+      references/required_documents.yaml
+  service_agent/
+    profile_change/SKILL.md
+    address_change/SKILL.md
+    cancellation/SKILL.md
+      references/retention_offers.md
+  order_agent/
+    order_lookup/SKILL.md
+    returns_guide/SKILL.md
+    refund_request/SKILL.md
+  _shared/
+    vulnerable_customer/SKILL.md
+```
+
+Skills belong to the **domain pack**: another industry replaces the folders, not the core.
+
+| Agent | Skill | What it covers | Loaded by |
+|---|---|---|---|
+| `clause_agent` | `clause_explain` | Explain a clause in plain language, one citation per sentence, no binding promises | Model |
+| | `fee_explain` | Read the fee table for the customer's plan and version, show the calculation | Model |
+| `account_agent` | `billing_explain` | Why a bill changed: compare two periods, list the line items that moved | Model |
+| `case_agent` | `case_guide` | What each case status means, what happens next, expected time | Model |
+| | `document_checklist` | Documents still missing for this case type, how to upload them | Model |
+| `service_agent` | `profile_change` | Contact-detail change as a draft, read-back before submitting | **Router** |
+| | `address_change` | Address change as a draft, proof-of-address rules | **Router** |
+| | `cancellation` | Mandatory disclosures, cooling-off rules, one retention offer at most, then a draft | **Router** |
+| `order_agent` | `order_lookup` | Find the right order from vague descriptions (date, item, amount) | Model |
+| | `returns_guide` | Return eligibility and steps by product category | Model |
+| | `refund_request` | Quote → confirm → commit; above the threshold, a draft for approval | **Router** |
+| shared | `vulnerable_customer` | Signs of distress or vulnerability → gentle tone, no selling, offer a human | Router (sentiment or keyword trigger) |
+
+**SKILL.md format.** Front matter is metadata that code checks at startup; the body is the procedure.
+
+```markdown
+---
+name: cancellation
+description: Cancel a plan or account. Use when the customer asks to cancel or close.
+agent: service_agent
+version: 1.4.0
+owner: retention-team
+compliance_review: CR-2026-031
+channels: [chat, voice]
+min_assurance: verified+step_up
+tools: [create_change_draft]
+eval_tags: [cancellation]
+---
+## When to use
+## Steps
+1. Read back the plan and contract end date.
+2. State the mandatory disclosures (references/disclosures.md).
+3. Make at most one retention offer; do not repeat it after a no.
+4. Create the cancellation draft; tell the customer it needs approval.
+## Never
+- Promise a refund amount or a date.
+## Hand off when
+- The customer disputes a charge, or mentions hardship.
+## Voice
+- At most 2 sentences per turn; confirm with yes or no.
+```
+
+**Loading.**
+1. The system prompt lists only the name and description of the worker's skills.
+2. The model calls `load_skill(name)` when it needs one. The tool refuses names outside the worker's allowlist.
+3. Reference files are read with `read_skill_file`, with path-traversal checks.
+4. **Compliance-critical skills are loaded by the router before the worker runs** (marked *Router* above), so the procedure can't be skipped.
+5. Budgets: a skill body is at most 2k tokens; at most 2 loads per turn in chat and 1 on voice ([Appendix A](#appendix-a-system-boundaries)).
+
+**Lifecycle.** The same path as prompts ([section 16](#16-llmops-git-pipeline-and-langfuse)):
+- Git pull request reviewed by the skill owner, plus compliance for skills with `compliance_review`;
+- CI checks the front matter (agent exists, tools are in that agent's allowlist, assurance level is valid);
+- golden-set cases tagged with the skill's `eval_tags` must pass before merge;
+- the release manifest pins each skill version, and Langfuse traces record which skills and versions were loaded.
 
 ### 4.5 What one LLM call contains
 

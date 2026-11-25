@@ -1,6 +1,6 @@
 # Customer Support Agent — Voice + Chat Reference Architecture
 
-**English** | [中文](README.zh-CN.md)
+**English** | [中文](README.zh-CN.md) · [Update history](CHANGELOG.md)
 
 **A vertical-agnostic reference architecture for an AI customer-support agent**, serving customers over **voice (Genesys contact centre)** and **online chat (app, web, WhatsApp)** from one shared core: **LangGraph** agents, **hybrid RAG**, **guardrails**, **evaluation** and **LLMOps**, on **Alibaba Qwen / Tongyi models**. Two deployment profiles:
 - **cloud:** Alibaba Cloud Model Studio (Bailian), Hong Kong region;

@@ -1,6 +1,6 @@
 # 客服 Agent —— 语音 + 在线聊天参考架构
 
-[English](README.md) | **中文**
+[English](README.md) | **中文** · [更新记录](CHANGELOG.md)
 
 **一个与行业无关的 AI 客服 agent 参考架构**：用同一套核心同时服务 **语音（Genesys 呼叫中心）** 和 **在线聊天（App、Web、WhatsApp）**，核心包括 **LangGraph** agent、**混合 RAG**、**guardrails（护栏）**、**评估** 和 **LLMOps**，模型统一使用 **阿里通义千问（Qwen）系列**。提供两种部署形态：
 - **云上：** 阿里云百炼（Model Studio），香港 region；

@@ -1312,7 +1312,61 @@ The diagrams are generated from code so they stay consistent and diffable. You c
 
 ## 22. Tech stack
 
-LangGraph · LangChain · vLLM · Ollama (local development) · Qwen3 (32B / 8B / 30B-A3B) · Qwen3-Embedding · Qwen3-Reranker · Qwen2.5-VL · Alibaba Cloud Model Studio (Bailian: Qwen, Paraformer, CosyVoice) · FunASR / SenseVoice · CosyVoice · Genesys Cloud CX / Engage (AudioConnector, Architect, Data Actions) · Milvus (dense + BM25) · Zvec (embedded vector store, local development) · Postgres · Redis · Kafka · Kubernetes (CPU/GPU pools, KEDA, NVIDIA GPU Operator) · Istio/Linkerd (mTLS) · OIDC IdP (e.g. Keycloak) with token exchange and CIBA · Apigee/Kong · Vault · cert-manager · Argo CD · Langfuse (prompts, datasets, LLM-as-judge, traces) · promptfoo / garak / PyRIT (red team) · ELK · Prometheus/Grafana · Testing: pytest · Hypothesis · Pact · Schemathesis · WireMock · Testcontainers · Keycloak · mock-oauth2-server · agentevals / openevals · ranx · RAGAS · FreeSWITCH / PJSIP · SIPp · jiwer · Playwright · Maestro · k6 · Locust · Chaos Mesh · Toxiproxy · OWASP ZAP · Trivy · Semgrep · Presidio
+Versions are the latest releases checked on **2026-11-25** (PyPI, npm, GitHub releases, endoflife.date, Hugging Face). They are a starting point, not a requirement: pin exact versions in lockfiles, image digests and `models.yaml`, and upgrade only through the evaluation and release gates ([section 16](#16-llmops-git-pipeline-and-langfuse)). Testing tools are described per layer in [15.9](#159-test-tooling).
+
+| Category | Component | Version | What it does here |
+|---|---|---|---|
+| Orchestration | **LangGraph** | 1.2.24 | Agent graphs, checkpoints, human-in-the-loop interrupts, crash resume |
+| Orchestration | **LangChain** | 1.5.2 | Model and tool adapters, retrievers; fake chat models in unit tests |
+| LLMOps | **Langfuse (Python SDK)** | 5.2.0 | Prompt versions, datasets, LLM-as-judge experiments, traces |
+| Models | **Qwen3-32B** | HF `Qwen/Qwen3-32B` | Clause answers, multi-step agents, offline judge (AWQ INT4 or FP8) |
+| Models | **Qwen3-8B** | HF `Qwen/Qwen3-8B` | Intent, rewrite, sentiment, verification, summaries, online judge |
+| Models | **Qwen3-30B-A3B** | HF `Qwen/Qwen3-30B-A3B-Instruct-2507` | Optional low-latency voice (MoE, ~3B active) |
+| Models | **Qwen3-Embedding** | HF `Qwen/Qwen3-Embedding-0.6B` (4B if evals justify) | Dense vectors for retrieval and the semantic cache |
+| Models | **Qwen3-Reranker** | HF `Qwen/Qwen3-Reranker-0.6B` (4B if evals justify) | Cross-encoder rerank of fused candidates |
+| Models | **Qwen2.5-VL** | HF `Qwen/Qwen2.5-VL-7B-Instruct` | Fields from receipts and reports (after OCR) |
+| Models | **Newer candidates** | Qwen3.5, Qwen3.8, Qwen3-VL-8B, Fun-CosyVoice3 | Not adopted by default; a swap goes through the golden set and release gates (section 16) |
+| Speech and documents | **Silero VAD** | 6.3 | End-of-speech detection on CPU in the voice gateway |
+| Speech and documents | **FunASR + SenseVoice** | FunASR 1.4.29 · HF `FunAudioLLM/SenseVoiceSmall` | On-prem speech-to-text (Cantonese, Mandarin, English) |
+| Speech and documents | **CosyVoice 2** | GitHub v2.0 · HF `FunAudioLLM/CosyVoice2-0.5B` | On-prem text-to-speech |
+| Speech and documents | **PaddleOCR** | 3.7.0 | Text extraction from scans and photos |
+| Speech and documents | **Presidio** | presidio-analyzer 2.2.366 | PII detection and redaction (rules + NER, HKID recognisers), no LLM |
+| Model serving | **vLLM** | 0.34.0 | Production inference: OpenAI-compatible API, prefix caching, constrained decoding |
+| Model serving | **Ollama** | 0.40.18 | Local development only: Qwen3-8B (quantised) on a laptop |
+| Model serving | **Alibaba Cloud Model Studio (Bailian)** | Managed service (pin model snapshot names) | Cloud profile, Hong Kong region: Qwen, Paraformer realtime (STT), CosyVoice (TTS) |
+| Telephony | **Genesys Cloud CX / Engage** | SaaS / vendor-managed | IVR, ACD, AudioConnector, Architect flows, Data Actions, secure DTMF |
+| Data | **Milvus** | 3.0.6 (pymilvus 3.0.3) | Vector + BM25 (jieba) search, partitions, `kb_live` alias |
+| Data | **Zvec** | 0.8.1 | Embedded vector store for local development, tests and read-only KB snapshots |
+| Data | **PostgreSQL + pgvector** | 19.0 latest (use the client's DBA-supported major) · pgvector client 0.5.1 | Checkpoints, tasks, interactions, audit index; pgvector for phase 1 RAG and long-term memory |
+| Data | **Redis** | 8.12.0 | Sessions, OTP, rate limits, caches |
+| Data | **Apache Kafka** | 4.4.0 (KRaft) | Domain events, cross-channel sync, audit stream |
+| Platform | **Kubernetes** | 1.37.2 (or the client's supported version) | CPU and GPU node pools |
+| Platform | **KEDA** | 2.21.1 | Autoscale vLLM on queue depth, not CPU |
+| Platform | **NVIDIA GPU Operator** | 26.7.3 | GPU drivers, device plugin and monitoring on the cluster |
+| Platform | **Istio / Linkerd** | Istio 1.32.0 · Linkerd edge-26.11.2 | Service mesh: mTLS between services, fault injection in tests |
+| Platform | **Argo CD** | 3.6.3 | GitOps deployment of the release bundle |
+| Security and identity | **Keycloak** | 26.8.2 | OIDC IdP for CI and reference setups (token exchange, CIBA) |
+| Security and identity | **Apigee / Kong** | Apigee: managed · Kong 3.9.5 | API gateway in front of core systems and MCP tools |
+| Security and identity | **HashiCorp Vault** | 2.2.2 | Secrets, dynamic credentials, signing keys |
+| Security and identity | **cert-manager** | 1.21.3 | Certificate issuance and rotation for mTLS |
+| Observability | **ELK (Elasticsearch)** | 9.5.7 | Redacted logs and the audit search index |
+| Observability | **Prometheus** | 3.16.0 | Metrics: latency, errors, GPU, vLLM queue, handoff rate |
+| Observability | **Grafana** | 13.3.2 | Dashboards and alerts |
+| Red team | **promptfoo** | 0.126.0 | Prompt-injection and policy test suites in CI |
+| Red team | **garak** | 0.17.1 | LLM vulnerability scanning |
+| Red team | **PyRIT** | 1.2.1 | Multi-turn adversarial attacks |
+| Testing | **pytest / Hypothesis** | 9.2.0 / 6.170.17 | Unit tests; property-based tests for guardrail rules and parsers |
+| Testing | **Pact / Schemathesis / WireMock** | pact-python 4.2.0 / 4.34.2 / 3.13.2 | Consumer contracts, OpenAPI fuzzing, mocked core-system APIs |
+| Testing | **Testcontainers** | Python 4.15.0 | Real Postgres, Redis, Kafka-compatible, Milvus, Keycloak in integration tests |
+| Testing | **mock-oauth2-server** | 7.0.2 | Unit and contract identity tests, including forged invalid tokens |
+| Testing | **agentevals / openevals** | 0.0.9 / 0.2.5 | Trajectory matching, multi-turn simulation, LLM-as-judge |
+| Testing | **ranx / RAGAS** | 0.3.21 / 0.4.4 | Retrieval metrics (Recall@k, MRR, nDCG); faithfulness and context metrics |
+| Testing | **FreeSWITCH / PJSIP / SIPp** | 1.11.4 / 2.18 / 3.8.0 | Test callers into the Genesys test org; SIP load |
+| Testing | **jiwer** | 4.0.0 | Speech recognition error rates (CER / WER) |
+| Testing | **Playwright / Maestro** | 1.65.2 / 2.12.1 | Web and agent-console E2E; mobile app flows |
+| Testing | **k6 / Locust** | 2.4.0 / 2.47.0 | HTTP and WebSocket load; Python chat load |
+| Testing | **Chaos Mesh / Toxiproxy** | 2.8.8 / 2.13.0 | Kubernetes fault injection; network latency and disconnects |
+| Testing | **OWASP ZAP / Trivy / Semgrep** | 2.17.0 / 0.76.2 / 1.187.0 | DAST; image and IaC scanning; SAST |
 
 ---
 

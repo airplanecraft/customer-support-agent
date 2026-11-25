@@ -8,6 +8,20 @@ Newest first. Each entry is written in English and Chinese. Diagram IDs refer to
 
 ---
 
+## v1.8 — 2026-11-25
+
+**English**
+- Section 22 tech stack rewritten as a table: category, component, version and what it does in this design (51 rows).
+- Versions are the latest releases checked on 2026-11-25 (PyPI, npm, GitHub releases, endoflife.date, Hugging Face); models are listed by Hugging Face ID; managed services (Bailian, Genesys, Apigee) are marked as such.
+- Newer model families (Qwen3.5, Qwen3.8, Qwen3-VL-8B, Fun-CosyVoice3) are listed as candidates, adopted only through the golden set and release gates.
+
+**中文**
+- 第 22 节技术栈改成表格：类别、组件、版本、在本设计中的用途（51 行）。
+- 版本号是 2026-11-25 查到的最新发布版本（PyPI、npm、GitHub releases、endoflife.date、Hugging Face）；模型按 Hugging Face ID 列出；托管服务（百炼、Genesys、Apigee）单独标注。
+- 较新的模型系列（Qwen3.5、Qwen3.8、Qwen3-VL-8B、Fun-CosyVoice3）列为候选，只有通过 golden set 和发布闸门才采用。
+
+---
+
 ## v1.7 — 2026-11-25
 
 **English**

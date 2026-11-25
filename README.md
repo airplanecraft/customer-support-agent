@@ -932,6 +932,37 @@ All three are correlated by `trace_id`.
 - core-API error rates;
 - verification failures per number;
 - cost per conversation.
+- CSAT or resolved rate dropping against baseline, by channel and release.
+
+### Customer satisfaction
+
+**Principles**
+- **The rating question is never LLM-generated.** It is a fixed Genesys Architect flow on voice and a fixed UI component in chat, so the AI can't fish for a 5.
+- **Two questions:** CSAT (1–5) and "Was your issue resolved?" (yes/no; the best first-contact-resolution signal). NPS is a separate quarterly study, not asked per session.
+- **Every score is tied to the session trace:** release, prompt and model versions, intents, worker, and `handled_by` (AI only, AI then human, human only).
+
+| Channel | How |
+|---|---|
+| Voice, AI handled | AudioConnector ends with `survey=true`; the Architect flow asks both questions by **DTMF** (no speech, so no STT errors); a Data Action posts the result with `conversationId` |
+| Voice, handed to a human | At transfer: "please stay on the line after the call to rate us" → same DTMF flow. If the customer hangs up, an **SMS link** follows |
+| App / web | Rating card at session close (stars, resolved, optional comment); if skipped, **one** push reminder |
+| WhatsApp | Quick-reply buttons inside the 24-hour window |
+
+**Survey service**
+- Triggered by `session.ended`. Invites at most **once per customer per 7 days**; skips calls under 20 seconds and sessions already in the complaints process.
+- Issues a **single-use, signed `survey_token`** (24 hours, bound to the session), so ratings can't be forged or repeated.
+- Comments are **untrusted text**: PII is redacted before storage, and any later LLM analysis treats them as data, not instructions.
+- `survey.submitted` → a **Langfuse score** on the session trace, plus Grafana dashboards by channel, intent, release and `handled_by`.
+- **Score ≤ 2 or not resolved** → a **callback task** (within 2 working days) and the annotation queue. Complaint keywords → the formal complaints process.
+
+**Reading the numbers**
+- Report AI-only, AI-then-human and human-only **separately**, so neither side's problems are blamed on the other.
+- Response rates are typically 10–20%, so CSAT is read alongside **implicit signals on 100% of sessions**: handoff rate, **repeat contact on the same intent within 7 days**, abandonment, and judge-scored sentiment (calibrated against real ratings).
+- For canary releases, CSAT is a slow, secondary signal; judges, rules and implicit signals decide.
+- Surveys are optional and don't affect service; responses are retained per PDPO policy.
+
+![C7 CSAT](docs/img/C7-csat.png)
+*C7 · Customer satisfaction, voice and app — source: [`C7-csat.drawio`](docs/diagrams/C7-csat.drawio)*
 
 ---
 
@@ -1007,7 +1038,7 @@ docs/diagrams/*.drawio   editable draw.io sources (open in draw.io or the VS Cod
 docs/img/*.png           exported previews used in this README
 tools/drawio_lib.py      tiny generator for component and sequence diagrams
 tools/gen_components.py  A1–A4, R1–R3
-tools/gen_sequences.py   B1–B5, C1–C6, D1–D2
+tools/gen_sequences.py   B1–B5, C1–C7, D1–D2
 tools/gen_state.py       M1–M2
 tools/gen_llmops.py      L1, G1, E1, E2, P1
 ```

@@ -292,6 +292,41 @@ s.msg("kf", "c", "SMS / push: refund issued", ret=True)
 s.note_over("c", "kf", "The AI never decides eligibility or approves. Money only returns to the original payment method. Switch + threshold live in config/policy.yaml (reviewed PR).", zone="sec")
 save(s, "C6-refund.drawio")
 
+# ---------------- C7 Customer satisfaction ----------------
+s = Sequence("C7 CSAT", [("c", "Customer", "client"), ("gx", "Genesys<br>(Architect survey flow)", "ext"), ("app", "App / Web /<br>WhatsApp", "client"),
+                          ("or", "Orchestrator<br>(LangGraph)", "core"), ("kf", "Kafka", "data"), ("sv", "Survey service", "core"),
+                          ("lf", "Langfuse · Grafana", "obs"), ("cs", "Staff<br>(callback · complaints)", "client")])
+s.text("C7 · Customer satisfaction — one survey service for voice and app; questions are fixed, never LLM-generated", 40, 10, 1300, 30, 16, True)
+s.msg("or", "kf", "session.ended (channel, handled_by: ai / ai→human / human, release, intents)")
+s.msg("kf", "sv", "session.ended")
+s.msg("sv", "sv", "invite? 7-day cap · call ≥ 20 s · not in complaint flow → survey_token (single use, 24 h, bound to session)")
+f = s.y + 20; s.y += 25
+s.msg("or", "gx", "AudioConnector ends with output variable survey=true")
+s.msg("gx", "c", "fixed prompt: \"Rate us 1 to 5\" · \"Resolved? Press 1 yes, 2 no\"", ret=True)
+s.msg("c", "gx", "DTMF 4 · 1")
+s.msg("gx", "sv", "Data Action: conversationId, score=4, resolved=yes")
+s.frame("alt  voice, AI handled", "c", "sv", f, s.y + 20); s.y += 30
+f = s.y + 20; s.y += 25
+s.msg("gx", "c", "at transfer: \"Please stay on the line after the call to rate us\"", ret=True)
+s.msg("c", "gx", "stays after the agent hangs up → same DTMF survey flow")
+s.msg("sv", "c", "hung up instead → SMS link with survey_token", ret=True)
+s.frame("alt  voice, handed to a human", "c", "sv", f, s.y + 20); s.y += 30
+f = s.y + 20; s.y += 25
+s.msg("sv", "app", "show rating card (fixed UI component: stars + resolved + optional comment)")
+s.msg("c", "app", "2 stars · not resolved · comment")
+s.msg("app", "sv", "POST /surveys/{survey_token}  (single use)")
+s.msg("sv", "c", "no rating → one push reminder only", ret=True)
+s.frame("alt  app / web / WhatsApp", "c", "sv", f, s.y + 20); s.y += 30
+s.msg("sv", "sv", "redact PII in comment (untrusted text) · store survey_responses")
+s.msg("sv", "kf", "survey.submitted")
+s.msg("kf", "lf", "Langfuse score on the session trace (release · prompt · model) · Grafana by channel / intent / release / handled_by")
+f = s.y + 20; s.y += 25
+s.msg("sv", "cs", "callback task (within 2 working days) + annotation queue")
+s.msg("sv", "cs", "complaint keywords → formal complaints process")
+s.frame("alt  score ≤ 2 or not resolved", "c", "cs", f, s.y + 20); s.y += 30
+s.note_over("c", "cs", "Survey response rates are 10–20%: always read alongside implicit signals on 100% of sessions — handoff rate, repeat contact within 7 days, abandonment, judge-scored sentiment", zone="obs")
+save(s, "C7-csat.drawio")
+
 # ---------------- D1 Events & cross-channel ----------------
 s = Sequence("D1 Events", [("or", "Orchestrator", "core"), ("kf", "Kafka", "data"), ("nt", "Notification svc", "core"),
                             ("crm", "CRM sync", "ext"), ("au", "Audit (WORM)", "sec"), ("bi", "Reporting", "obs"), ("cu", "Customer devices", "client")])

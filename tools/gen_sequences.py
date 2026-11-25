@@ -422,8 +422,11 @@ s.msg("wx", "ad", "callback → sync_msg (as above)")
 s.msg("ad", "or", "turn {anonymous}")
 s.msg("or", "ad", "needs a verified customer → send the binding link", ret=True)
 s.msg("ad", "wx", "send_msg: link card to the binding page")
-s.msg("c", "bd", "opens the page inside WeChat → OIDC login at our IdP (SMS OTP to the registered mobile)")
-s.msg("bd", "bd", "bind external_userid (+ unionid) ↔ customer_id · assurance: verified-low · audit")
+s.msg("c", "bd", "opens the page inside WeChat (one-time bind_token, 10 min)")
+s.msg("bd", "bd", "silent WeChat web authorisation → opener's unionid must match the chat's external_userid (blocks forwarded links)")
+s.msg("c", "bd", "OIDC login at our IdP (SMS OTP to the registered mobile) · PIPL consent")
+s.msg("bd", "bd", "bind external_userid + unionid ↔ customer_id · assurance: verified-low · audit")
+s.msg("bd", "c", "SMS to the registered mobile: \"Linked to WeChat. Not you? Unlink.\"", ret=True)
 s.msg("bd", "c", "\"Bound — go back to the chat\"", ret=True)
 s.frame("bind once", "c", "or", f, s.y + 20); s.y += 30
 f = s.y + 20; s.y += 25

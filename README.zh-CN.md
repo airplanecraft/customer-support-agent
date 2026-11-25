@@ -525,6 +525,60 @@ refund:
 - **异步接收。** 适配器先验签、立即确认收到、按消息 ID 去重，再在后台处理这一轮，所以平台重发不会造成重复操作。
 - **转人工** 优先用平台自带的人工接待（微信客服 → 企业微信），交接包和[第 13 节](#13-转人工与坐席控制台)一样用 `handoff_id`。
 
+#### 端到端链路：从微信到业务系统
+
+```
+个人微信（客户）
+  │  打开微信客服会话（链接或二维码；不用加好友）
+  ▼
+微信客服（腾讯平台，挂在企业微信下）
+  │  ① 加密回调
+  ▼
+外部 API 网关（WAF、限流）
+  ▼
+消息适配器：验签解密 → sync_msg → 去重 → 查绑定关系（customer_id）
+  ▼
+Orchestrator（agent，LangGraph）
+  ├─ ② 问 LLM ──► 模型网关 ──► Qwen（百炼或 vLLM）
+  │               ◄── 回答，或者一个工具调用请求，例如 get_policy_detail
+  ├─ ③ 检索 ────► RAG 服务
+  └─ ④ 执行工具 ─► MCP server ──► 内部 API 网关 ──► 业务系统 API
+  ▼  ⑤ 回复
+消息适配器 ──► send_msg ──► 微信客服 ──► 个人微信
+```
+
+**LLM 只提建议，执行的是 agent 的代码。** 模型返回文本或工具调用请求。Orchestrator 检查这个工具是否在该 worker 的白名单里、身份等级是否足够，再换取 token（`customer_id` 来自绑定关系，从不来自模型），然后调用 MCP server。LLM 永远碰不到 MCP 或任何 API。WhatsApp 和 Telegram 走同样的链路，只是平台和适配器不同。
+
+#### 渠道绑定
+
+微信 ID 只能证明 *是哪个微信号*，不能证明 *是哪个客户*。客户在 **我们的 IdP** 认证一次后，才把两者绑定。
+
+| 方式 | 做法 | 适用 |
+|---|---|---|
+| **A · 聊天里发链接 → 网页登录**（默认） | 1. 机器人发一张链接卡片，带一次性的 `bind_token`（已签名、10 分钟有效、只能用一次，关联发起聊天的 `external_userid`）。<br>2. 在微信里打开的网页静默获取打开者的微信身份（网页授权 `snsapi_base`）。<br>3. **打开者的 `unionid` 必须和聊天的 `external_userid` 对应**，防止链接被转发。<br>4. 客户在我们的 IdP 登录（短信验证码发到预留手机号）。<br>5. 保存绑定关系，并 **发短信到预留手机号**："您的账户已于 10:02 绑定微信，如非本人操作请点击解绑。" | 没有 App 的客户 |
+| **B · 从 App 发起**（首选） | 1. 客户已经在 App 里强认证登录，点"绑定微信"。<br>2. App 打开带一次性 `scene_param` 的微信客服链接。<br>3. `enter_session` 事件带着 `scene_param`；绑定服务校验后，把这个 `external_userid` 绑到 App 里已登录的客户。 | 有 App 的客户：最安全，没有转发风险，不用再输验证码 |
+| **C · 小程序手机号验证**（可选） | 小程序的手机号验证返回微信认证过的手机号，和预留手机号比对，再加一个因素，例如短信验证码。 | 方便；只靠手机号一致只算中等强度 |
+
+**为什么方式 A 要校验 `unionid`。** 不校验的话，客户 A 可以把链接转给 B；B 用自己的账户登录，B 的账户就被绑到 A 的微信上，A 就能在聊天里看到 B 的数据。如果拿不到 `unionid`（需要企业微信绑定微信开放平台账号），就靠短信通知加一键解绑兜底。
+
+**绑定之后**
+- **身份等级：** 绑定后的微信会话是 *已核验-低*：可以查非敏感信息（续期日、工单状态）。变更和敏感数据每次都要在 App 或网页上 step-up。
+- **有效期：** 定期重新确认（例如每 90 天）；客户发"解绑"或在 App 里解绑、预留手机号变更、客服或风控规则触发时，立即解绑。
+- **限制：** 一个微信号只绑一个客户；一个客户最多绑少量几个微信号。从不使用昵称或头像做任何判断，也从不让客户在聊天里输入证件号来"认证"。
+- **合规（中国内地）：** 绑定页展示隐私告知，并取得 PIPL 要求的单独同意；绑定记录可审计、可删除，并留在内地 region。
+
+```
+channel_binding
+  channel          wechat_kf
+  external_userid  wmXXXX
+  unionid          oXXXX            # 有条件时
+  customer_id      C-10086
+  method           app_scene | h5_login | miniprogram_phone
+  assurance        verified-low
+  bound_at, last_confirmed_at, expires_at
+  status           active | revoked
+```
+
 ![C9 WeChat channel](docs/img/C9-wechat-channel.png)
 *C9 · 微信渠道，中国内地区域形态 —— 源文件：[`C9-wechat-channel.drawio`](docs/diagrams/C9-wechat-channel.drawio)*
 

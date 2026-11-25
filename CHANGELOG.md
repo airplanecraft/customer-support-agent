@@ -8,6 +8,20 @@ Newest first. Each entry is written in English and Chinese. Diagram IDs refer to
 
 ---
 
+## v1.15 — 2026-11-25
+
+**English**
+- Messaging apps: new **end-to-end path** from personal WeChat through WeChat Customer Service, the gateway, the messaging adapter and the agents to MCP and the system-of-record API, stating that the LLM only proposes tool calls and the agent's code executes them.
+- New **channel binding** rules: three methods (link in chat with web login and a `unionid` check against forwarded links; started in the app with `scene_param`; mini program phone check), assurance after binding, lifetime and revocation, limits, PIPL consent, and the `channel_binding` record.
+- Diagram C9: the binding step now shows the `unionid` check, PIPL consent and the SMS notice with unlink.
+
+**中文**
+- 消息应用：新增 **端到端链路**：个人微信 → 微信客服 → 网关 → 消息适配器 → agent → MCP → 业务系统 API，并说明 LLM 只提出工具调用，由 agent 的代码执行。
+- 新增 **渠道绑定** 规则：三种方式（聊天里发链接加网页登录，用 `unionid` 校验防止链接被转发；从 App 用 `scene_param` 发起；小程序手机号验证），绑定后的身份等级、有效期与解绑、数量限制、PIPL 同意，以及 `channel_binding` 记录。
+- C9 图：绑定步骤补上 `unionid` 校验、PIPL 同意和带解绑入口的短信通知。
+
+---
+
 ## v1.14 — 2026-11-25
 
 **English**

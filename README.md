@@ -524,6 +524,60 @@ The core is region-neutral; each region profile ([section 19](#region-profiles))
 - **Asynchronous ingress.** The adapter verifies the signature, acknowledges at once, deduplicates by message ID and processes the turn in the background, so platform retries never create duplicate actions.
 - **Handoff** uses the platform's own human reception where it exists (WeChat Customer Service → WeCom), with the same `handoff_id` packet as [section 13](#13-human-handoff-and-agent-console).
 
+#### End-to-end path: from WeChat to the system of record
+
+```
+Personal WeChat (customer)
+  │  opens the WeChat Customer Service chat (link or QR code; no friend request)
+  ▼
+WeChat Customer Service (Tencent platform, under WeCom)
+  │  ① encrypted callback
+  ▼
+External API gateway (WAF, rate limits)
+  ▼
+Messaging adapter: verify + decrypt → sync_msg → dedupe → look up the binding (customer_id)
+  ▼
+Orchestrator (agents, LangGraph)
+  ├─ ② asks the LLM ──► model gateway ──► Qwen (Bailian or vLLM)
+  │                     ◄── an answer, or a proposed tool call such as get_policy_detail
+  ├─ ③ retrieval ─────► RAG service
+  └─ ④ runs the tool ─► MCP server ──► internal API gateway ──► system-of-record API
+  ▼  ⑤ reply
+Messaging adapter ──► send_msg ──► WeChat Customer Service ──► personal WeChat
+```
+
+**The LLM only proposes; the agent's code executes.** The model returns text or a tool-call request. The orchestrator checks the tool against the worker's allowlist and the assurance level, exchanges the token (with `customer_id` from the binding, never from the model) and calls the MCP server. The LLM never reaches MCP or any API. WhatsApp and Telegram follow the same path; only the platform and the adapter differ.
+
+#### Channel binding
+
+A WeChat ID proves *which WeChat account*, not *which customer*. Binding links the two once, after the customer authenticates with **our IdP**.
+
+| Method | How | When to use |
+|---|---|---|
+| **A · Link in chat → web login** (default) | 1. The bot sends a link card with a one-time `bind_token` (signed, 10 minutes, single use, tied to the chat's `external_userid`).<br>2. The page, opened inside WeChat, gets the opener's WeChat identity silently (web authorisation, `snsapi_base`).<br>3. **The opener's `unionid` must match the chat's `external_userid`**, which blocks forwarded links.<br>4. The customer signs in at our IdP (SMS OTP to the registered mobile).<br>5. The binding is stored and an **SMS goes to the registered mobile**: "Linked to WeChat at 10:02. Not you? Unlink." | Customers without the app |
+| **B · Started in the app** (preferred) | 1. The customer, already signed in strongly in the app, taps "Link WeChat".<br>2. The app opens the WeChat Customer Service link with a one-time `scene_param`.<br>3. The `enter_session` event carries `scene_param`; the binding service checks it and binds that `external_userid` to the signed-in customer. | Customers with the app: strongest, no forwarding risk, no extra OTP |
+| **C · Mini program phone check** (optional) | The mini program's phone-number check returns a WeChat-verified number, matched against the registered mobile, plus one more factor such as an SMS OTP. | Convenience; the phone match alone is only medium assurance |
+
+**Why the `unionid` check in A matters.** Without it, customer A could forward the link to B; B signs in with B's account, and B's account is bound to A's WeChat, so A can read B's data in chat. If `unionid` isn't available (it needs WeCom linked to a WeChat Open Platform account), the SMS notice with one-tap unlink is the fallback.
+
+**After binding**
+- **Assurance:** a bound WeChat session is *verified-low*: enough for non-sensitive reads (renewal date, case status). Changes and sensitive data need step-up in the app or on the web every time.
+- **Lifetime:** re-confirmed periodically (e.g. every 90 days); revoked at once when the customer sends "unlink" or unlinks in the app, when the registered mobile changes, or by staff or fraud rules.
+- **Limits:** one WeChat account binds to one customer; a customer binds at most a few WeChat accounts. Nicknames and avatars are never used for anything, and customers are never asked to type ID numbers into the chat to "verify".
+- **Compliance (mainland China):** the binding page shows the privacy notice and collects the separate consent PIPL requires; bindings are auditable and deletable, and stay in the mainland region.
+
+```
+channel_binding
+  channel          wechat_kf
+  external_userid  wmXXXX
+  unionid          oXXXX            # when available
+  customer_id      C-10086
+  method           app_scene | h5_login | miniprogram_phone
+  assurance        verified-low
+  bound_at, last_confirmed_at, expires_at
+  status           active | revoked
+```
+
 ![C9 WeChat channel](docs/img/C9-wechat-channel.png)
 *C9 · WeChat channel, mainland China region profile — source: [`C9-wechat-channel.drawio`](docs/diagrams/C9-wechat-channel.drawio)*
 

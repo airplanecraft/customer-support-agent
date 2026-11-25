@@ -3,6 +3,10 @@ sys.path.insert(0, os.path.dirname(__file__))
 from drawio_lib import Diagram
 
 OUT = os.path.join(os.path.dirname(__file__), "..", "docs", "diagrams")
+HL = "#E8590C"      # design-highlight border and badges
+P_ENTRY = "#2B8A3E"  # channel → external gateway → orchestrator
+P_TOOL = "#C92A2A"   # orchestrator → MCP → internal gateway → systems of record
+P_MODEL = "#1971C2"  # orchestrator / RAG → model gateway → models
 
 # ======================= A1 System context =======================
 d = Diagram("A1 System Context", 1400, 760)
@@ -28,7 +32,7 @@ d.link(core, bl, "cloud profile only", dashed=True, exit=(1, .88), entry=(0, .5)
 d.save(os.path.join(OUT, "A1-system-context.drawio"))
 
 # ======================= A2 Components =======================
-d = Diagram("A2 Components", 1920, 1420)
+d = Diagram("A2 Components", 1920, 1600)
 d.text("A2 · Components (containers) — one shared core for voice and chat", 40, 10, 900, 30, 16, True)
 d.zone("Channels", 20, 50, 1880, 110, "client")
 app = d.box("Mobile app<br>(tokens in Keychain / Keystore)", 80, 80, 200, 60, "client")
@@ -45,7 +49,7 @@ scan = d.box("File scan<br>(AV + CDR)", 820, 215, 160, 60, "sec")
 
 d.zone("Application zone — K8s CPU pool · service-mesh mTLS", 20, 320, 1300, 460, "core")
 orch = d.box("<b>Orchestrator</b><br>LangGraph: router + workers<br>checkpoints · token exchange", 400, 360, 280, 100, "core")
-tst = d.box("<b>Token store</b><br>auth_ref → token (Redis, TTL)", 740, 370, 240, 60, "sec")
+tok = d.box("<b>Token store</b><br>auth_ref → token (Redis, TTL)", 740, 370, 240, 60, "sec")
 ver = d.box("<b>Verification service</b><br>SMS OTP + DOB (DTMF) → IdP", 1060, 370, 240, 60, "core")
 rag = d.box("<b>RAG service</b><br>rewrite · hybrid search ·<br>rerank · citation check", 60, 490, 260, 80, "agent")
 mz = d.zone("MCP servers — tools the agents call<br>(own mTLS client cert each)", 700, 470, 320, 272, "agent")
@@ -71,7 +75,7 @@ d.zone("Data zone (DB protocols · NetworkPolicy · Vault creds)", 20, 800, 1300
 mil = d.db("Milvus<br>dense + BM25", 60, 835, 140, 100)
 red = d.db("Redis<br>sessions · OTP", 240, 835, 140, 100)
 pg = d.db("Postgres<br>checkpoints · tasks<br>audit index", 470, 835, 150, 100)
-obj = d.db("Object storage<br>clauses · uploads", 660, 835, 150, 100)
+obj = d.db("Object storage<br>clauses · uploads", 640, 835, 140, 100)
 kf = d.db("Kafka<br>task / session / doc events", 1060, 835, 220, 100)
 
 d.zone("Observability (all services)", 1340, 800, 560, 170, "obs")
@@ -84,41 +88,61 @@ idp = d.box("<b>IdP (OIDC)</b><br>customer + staff SSO<br>token exchange / CIBA"
 igw = d.box("<b>Internal API gateway</b>", 760, 1030, 200, 60, "edge")
 cs = d.box("Account system · Case management · CRM", 1000, 1030, 300, 60, "ext")
 
-d.link(app, egw, "HTTPS / WSS + token", exit=(.5, 1), entry=(.25, 0))
-d.link(stf, egw, "staff token", exit=(.5, 1), entry=(.7, 0))
+d.link(app, egw, "HTTPS / WSS + token", exit=(.5, 1), entry=(.25, 0), color=P_ENTRY, width=3)
+d.link(stf, egw, "staff token", exit=(.5, 1), entry=(.7, 0), color=P_ENTRY, width=3)
 d.link(web, bff, "cookie")
-d.link(bff, egw, "token", exit=(0, .5), entry=(1, .5))
+d.link(bff, egw, "token", exit=(0, .5), entry=(1, .5), color=P_ENTRY, width=3)
 d.link(ph, vgw, "AudioConnector")
-d.link(egw, orch, "chat / API", exit=(.85, 1), entry=(.2, 0))
+d.link(egw, orch, "chat / API", exit=(.85, 1), entry=(.2, 0), color=P_ENTRY, width=3)
 d.link(vgw, ver, "Data Action:<br>OTP + DOB")
-d.link(ver, tst, "token", exit=(0, .5), entry=(1, .5))
-d.link(orch, tst, "auth_ref", exit=(1, .3), entry=(0, .5))
+d.link(ver, tok, "token", exit=(0, .5), entry=(1, .5))
+d.link(orch, tok, "auth_ref", exit=(1, .3), entry=(0, .5))
 d.link(vgw, orch, "turns (auth_ref)", exit=(0, .7), entry=(.8, 0), points=[(1030, 261), (1030, 340), (624, 340)])
 d.link(orch, rag, "mTLS · rag token", exit=(0, .5), entry=(.5, 0), points=[(190, 410)])
-d.link(orch, mz, "mTLS · exchanged tokens", exit=(1, .8), entry=(.5, 0), points=[(860, 440)])
-d.link(orch, mgw, "", exit=(.2, 1), entry=(1, .5), points=[(456, 680)])
-d.link(rag, mgw, "")
-d.link(mgw, gpu_main, "vLLM (OpenAI-compatible)", exit=(.5, 1), entry=(0, .5), points=[(190, 760), (1350, 760), (1350, 390)])
+d.link(orch, mz, "mTLS · exchanged tokens", exit=(1, .8), entry=(.5, 0), points=[(860, 440)], color=P_TOOL, width=3)
+d.link(orch, mgw, "", exit=(.2, 1), entry=(1, .5), points=[(456, 680)], color=P_MODEL, width=3)
+d.link(rag, mgw, "", color=P_MODEL, width=3)
+d.link(mgw, gpu_main, "vLLM or Bailian (OpenAI-compatible)", exit=(.5, 1), entry=(0, .5), points=[(190, 760), (1350, 760), (1350, 390)], color=P_MODEL, width=3)
 d.link(vgw, stt, "audio", exit=(1, .5), entry=(.5, 0), points=[(1755, 245)])
 d.link(rag, mil, "hybrid search", exit=(0, .5), entry=(.3, 0), points=[(40, 530), (40, 820), (102, 820)])
 d.link(orch, pg, "checkpoints", exit=(.8, 1), entry=(.85, 0))
 d.link(orch, kf, "events", exit=(1, .95), entry=(0, .5), points=[(1040, 455), (1040, 885)])
 d.link(kf, nts, "consume", exit=(.5, 0), entry=(.5, 1))
-d.link(mz, igw, "TLS / mTLS + user token", exit=(.5, 1), entry=(.5, 0), color="#ae4132")
-d.link(igw, cs, "")
+d.link(mz, igw, "mTLS + user token", exit=(.5, 1), entry=(.5, 0), color=P_TOOL, width=3)
+d.link(igw, cs, "", color=P_TOOL, width=3)
 d.link(ver, idp, "token exchange", dashed=True, exit=(1, .5), entry=(.5, 0), points=[(1320, 400), (1320, 985), (1520, 985)])
 
-d.zone("LLMOps plane — Git is the source of truth; the pipeline is the only writer to Langfuse", 20, 1160, 1880, 220, "obs")
-git = d.box("<b>Git</b><br>prompts · models.yaml · evaluators<br>judge prompts · datasets · release.yaml", 60, 1210, 270, 80, "data")
-ci = d.box("<b>CI / CD pipeline</b><br>sync → evaluate → gate →<br>label → deploy → canary", 380, 1210, 240, 80, "core")
-lf = d.box("<b>Langfuse (self-hosted)</b><br>prompt versions + config · datasets / experiments<br>LLM-as-judge evaluators · traces · annotation queues", 680, 1200, 380, 100, "obs")
-rev = d.box("<b>Rule-eval service</b><br>deterministic checks on traces<br>(same code as guardrails)", 1110, 1210, 240, 80, "sec")
-reg = d.box("<b>Model registry</b><br>models.yaml (hash, licence, eval, approval)<br>weights in object storage", 1400, 1210, 270, 80, "model")
-tst = d.box("<b>Test harness</b><br>user simulator · mock core<br>systems · SIP sim · red team", 1700, 1210, 180, 80, "agent")
+llm = d.zone("LLMOps plane — Git is the source of truth; the pipeline is the only writer to Langfuse", 20, 1340, 1880, 220, "obs")
+git = d.box("<b>Git</b><br>prompts · models.yaml · evaluators<br>judge prompts · datasets · release.yaml", 60, 1390, 270, 80, "data")
+ci = d.box("<b>CI / CD pipeline</b><br>sync → evaluate → gate →<br>label → deploy → canary", 380, 1390, 240, 80, "core")
+lf = d.box("<b>Langfuse (self-hosted)</b><br>prompt versions + config · datasets / experiments<br>LLM-as-judge evaluators · traces · annotation queues", 680, 1380, 380, 100, "obs")
+rev = d.box("<b>Rule-eval service</b><br>deterministic checks on traces<br>(same code as guardrails)", 1110, 1390, 240, 80, "sec")
+reg = d.box("<b>Model registry</b><br>models.yaml (hash, licence, eval, approval)<br>weights in object storage", 1400, 1390, 270, 80, "model")
+tst = d.box("<b>Test harness</b><br>user simulator · mock core<br>systems · SIP sim · red team", 1700, 1390, 180, 80, "agent")
 d.link(git, ci, "PR merged")
 d.link(ci, lf, "push versions · labels")
 d.link(lf, rev, "traces", both=True)
-d.note("Runtime: orchestrator reads prompts by release label (cache + image-baked fallback) · all LLM calls traced to Langfuse · judges call the model gateway (no external APIs)", 60, 1310, 1000, 45)
+
+# ---- design highlights (A2) ----
+for cid, n in [(egw, 1), (igw, 2), (mz, 3), (rag, 4), (mgw, 5), (tok, 6), (apv, 7), (grd, 8), (llm, 9)]:
+    d.emph(cid, HL); d.badge(cid, n, HL)
+d.box("<b>Design highlights</b><br>"
+      "<b>1 External API gateway</b> — the only way in for app, web and staff traffic: WAF, JWT check, rate limits (client's Apigee / Kong)<br>"
+      "<b>2 Internal API gateway</b> — the only way to systems of record; each MCP server has its own client cert and reaches only its own APIs<br>"
+      "<b>3 MCP servers</b> — our tool layer over the client's APIs: the LLM never sees raw APIs; customer identity comes from the token; changes are drafts only<br>"
+      "<b>4 RAG service</b> — hybrid search (vector + BM25), rerank, version-correct clauses, a citation check on every sentence<br>"
+      "<b>5 Model gateway</b> — the only way to any model: routes between Bailian and vLLM, quotas, cost per channel, fallback to a smaller model<br>"
+      "<b>6 Token store</b> — tokens never enter agent state or prompts; agents carry only an auth_ref<br>"
+      "<b>7 Approval service</b> — AI drafts, humans approve; separation of duties before anything takes effect<br>"
+      "<b>8 Guardrail library</b> — the same rule code runs live and in offline evaluation<br>"
+      "<b>9 LLMOps plane</b> — prompts, models, evaluators and datasets versioned in Git; the pipeline gates every release",
+      20, 1155, 1300, 170, "ext", shape="rounded=1", extra_style=f"align=left;spacingLeft=12;fontSize=11;strokeColor={HL};strokeWidth=2;")
+d.box("<b>Key paths</b><br>"
+      f"<font color=\"{P_ENTRY}\">━━━</font> channels → external API gateway → orchestrator<br>"
+      f"<font color=\"{P_TOOL}\">━━━</font> orchestrator → MCP → internal API gateway → systems of record<br>"
+      f"<font color=\"{P_MODEL}\">━━━</font> orchestrator / RAG → model gateway → Bailian or vLLM",
+      1340, 1155, 560, 170, "ext", shape="rounded=1", extra_style=f"align=left;spacingLeft=12;fontSize=12;strokeColor={HL};strokeWidth=2;")
+d.note("Runtime: orchestrator reads prompts by release label (cache + image-baked fallback) · all LLM calls traced to Langfuse · judges call the model gateway (no external APIs)", 60, 1490, 1000, 45)
 d.save(os.path.join(OUT, "A2-components.drawio"))
 
 # ======================= A3 Network & deployment =======================
@@ -155,19 +179,29 @@ d.zone("Client internal network (other teams)", 760, 780, 1020, 150, "ext")
 ig = d.box("Internal API gateway<br>TLS + app token, or mTLS", 800, 820, 260, 70, "edge")
 cs = d.box("Accounts · Cases · CRM", 1100, 825, 220, 60, "ext")
 d.box("IdP (OIDC)<br>← token exchange (TLS)", 1380, 825, 220, 60, "sec")
-d.link(cust, waf, "TLS (one-way) + access token")
+d.link(cust, waf, "TLS (one-way) + access token", color=P_ENTRY, width=3)
 d.link(tel, vg, "TLS · AudioConnector WSS + Data Actions")
-d.link(waf, orch, "", exit=(.32, 1), entry=(.5, 0))
+d.link(waf, orch, "", exit=(.32, 1), entry=(.5, 0), color=P_ENTRY, width=3)
 d.link(vg, orch, "mTLS", exit=(.5, 1), entry=(.8, 0), points=[(730, 360), (224, 360)])
 d.link(vg, g3, "mTLS · audio", exit=(1, .5), entry=(1, .5), points=[(1270, 245), (1270, 627)])
-d.link(orch, mz, "mTLS", exit=(1, .5), entry=(0, .15))
+d.link(orch, mz, "mTLS", exit=(1, .5), entry=(0, .15), color=P_TOOL, width=3)
 d.link(orch, rag, "mTLS")
-d.link(rag, mg, "mTLS")
-d.link(mg, g1, "mTLS", exit=(.5, 1), entry=(0, .5), points=[(170, 715), (970, 715), (970, 437)])
+d.link(rag, mg, "mTLS", color=P_MODEL, width=3)
+d.link(mg, g1, "mTLS", exit=(.5, 1), entry=(0, .5), points=[(170, 715), (970, 715), (970, 437)], color=P_MODEL, width=3)
 d.link(cpu, dz, "DB protocols over TLS", exit=(.15, 1), entry=(.2, 0))
-d.link(mz, ig, "mTLS (cert per MCP) + user token", exit=(.5, 1), entry=(.5, 0), color="#ae4132", points=[(420, 745), (930, 745)])
-d.link(ig, cs, "TLS")
+d.link(mz, ig, "mTLS (cert per MCP) + user token", exit=(.5, 1), entry=(.5, 0), color=P_TOOL, width=3, points=[(420, 745), (930, 745)])
+d.link(ig, cs, "TLS", color=P_TOOL, width=3)
 d.note("<b>Legend</b><br>TLS = only the server proves its identity<br>mTLS = both sides present certificates → <b>service-level</b> identity<br>access token = <b>user-level</b> identity and permissions (sent on every user call)", 800, 950, 560, 90)
+
+# ---- design highlights (A3, same numbering as A2) ----
+for cid, n in [(waf, 1), (ig, 2), (mz, 3), (rag, 4), (mg, 5)]:
+    d.emph(cid, HL); d.badge(cid, n, HL)
+d.box("<b>Design highlights</b> (numbers as in A2)<br>"
+      "1 external API gateway · 2 internal API gateway · 3 MCP servers · 4 RAG · 5 model gateway<br>"
+      f"<font color=\"{P_ENTRY}\">━━━</font> channels in · "
+      f"<font color=\"{P_TOOL}\">━━━</font> tools → systems of record · "
+      f"<font color=\"{P_MODEL}\">━━━</font> model calls",
+      20, 950, 740, 90, "ext", shape="rounded=1", extra_style=f"align=left;spacingLeft=12;fontSize=12;strokeColor={HL};strokeWidth=2;")
 d.save(os.path.join(OUT, "A3-network-deployment.drawio"))
 
 # ======================= A4 Agent graph =======================

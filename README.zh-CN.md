@@ -99,6 +99,8 @@
 ![A2 Components](docs/img/A2-components.png)
 *A2 · 组件 —— 源文件：[`A2-components.drawio`](docs/diagrams/A2-components.drawio)*
 
+**怎么看 A2：** 橙色编号的组件（1–9）是关键设计决策，说明见图下方的图例。彩色线是三条关键路径：绿色＝渠道经外部 API 网关进入，红色＝工具调用经 MCP 和内部 API 网关到业务系统，蓝色＝所有模型调用都经过模型网关。
+
 | 组件 | 职责 |
 |---|---|
 | **外部 API 网关**（客户现有的，如 Apigee 或 Kong） | TLS、WAF、用 IdP 的 JWKS 校验 JWT、粗粒度 scope、限流、路由 |

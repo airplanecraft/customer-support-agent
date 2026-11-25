@@ -49,7 +49,24 @@ class Diagram:
         style = f"text;html=1;align=left;verticalAlign=middle;fontSize={size};" + ("fontStyle=1;" if bold else "")
         return self._add(self._id(), label, style, f'<mxGeometry x="{x}" y="{y}" width="{w}" height="{h}" as="geometry"/>')
 
-    def link(self, src, tgt, label="", dashed=False, color="#333333", both=False, exit=None, entry=None, points=None):
+    def emph(self, cid, color="#E8590C", width=3):
+        """Highlight an existing shape: thicker border in the highlight colour."""
+        for i, cell in enumerate(self.cells):
+            if cell.startswith(f'<mxCell id="{cid}" '):
+                head, rest = cell.split('style="', 1)
+                style, tail = rest.split('"', 1)
+                self.cells[i] = f'{head}style="{style}strokeColor={color};strokeWidth={width};"{tail}'
+                return cid
+        raise KeyError(cid)
+
+    def badge(self, cid, n, color="#E8590C"):
+        """Numbered circle on the top-left corner of a shape (design highlight)."""
+        x, y, _, _ = self.geo[cid]
+        style = (f"ellipse;whiteSpace=wrap;html=1;fillColor={color};strokeColor={color};fontColor=#ffffff;"
+                 "fontStyle=1;fontSize=13;")
+        return self._add(self._id(), str(n), style, f'<mxGeometry x="{x - 13}" y="{y - 13}" width="26" height="26" as="geometry"/>')
+
+    def link(self, src, tgt, label="", dashed=False, color="#333333", both=False, exit=None, entry=None, points=None, width=1):
         """Orthogonal edge. Ports are chosen from the relative position of the two shapes unless given.
         exit/entry = (x, y) relative (0..1); points = list of absolute waypoints."""
         if (exit is None or entry is None) and src in self.geo and tgt in self.geo:
@@ -61,7 +78,8 @@ class Diagram:
                 auto_exit, auto_entry = ((.5, 1), (.5, 0)) if dy > 0 else ((.5, 0), (.5, 1))
             exit = exit or auto_exit; entry = entry or auto_entry
         style = (f"edgeStyle=orthogonalEdgeStyle;rounded=1;html=1;endArrow=block;strokeColor={color};fontSize=10;"
-                 "labelBackgroundColor=#ffffff;" + ("dashed=1;" if dashed else "") + ("startArrow=block;" if both else ""))
+                 "labelBackgroundColor=#ffffff;" + ("dashed=1;" if dashed else "") + ("startArrow=block;" if both else "")
+                 + (f"strokeWidth={width};" if width != 1 else ""))
         if exit:
             style += f"exitX={exit[0]};exitY={exit[1]};exitDx=0;exitDy=0;"
         if entry:

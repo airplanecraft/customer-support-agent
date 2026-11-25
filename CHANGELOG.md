@@ -8,6 +8,22 @@ Newest first. Each entry is written in English and Chinese. Diagram IDs refer to
 
 ---
 
+## v1.10 — 2026-11-25
+
+**English**
+- A2 components: nine **design highlights** marked with orange borders and numbered badges (external API gateway, internal API gateway, MCP servers, RAG service, model gateway, token store, approval service, guardrail library, LLMOps plane), with a legend explaining each one.
+- Three **key paths** drawn as thick coloured lines: channels → external API gateway → orchestrator (green); orchestrator → MCP → internal API gateway → systems of record (red); orchestrator / RAG → model gateway → Bailian or vLLM (blue).
+- A3 network: the same numbering for the gateways, MCP, RAG and model gateway, and the same path colours.
+- Section 2 explains how to read A2. Diagram helpers `emph`, `badge` and line width added to `tools/drawio_lib.py`.
+
+**中文**
+- A2 组件图：用橙色边框和编号标出九个 **设计亮点**（外部 API 网关、内部 API 网关、MCP server、RAG 服务、模型网关、token store、审批服务、护栏库、LLMOps 区域），并加图例逐条说明。
+- 三条 **关键路径** 用加粗彩色线画出：渠道 → 外部 API 网关 → orchestrator（绿）；orchestrator → MCP → 内部 API 网关 → 业务系统（红）；orchestrator / RAG → 模型网关 → 百炼或 vLLM（蓝）。
+- A3 网络图：网关、MCP、RAG 和模型网关用同样的编号，路径用同样的颜色。
+- 第 2 节说明怎么看 A2。`tools/drawio_lib.py` 新增 `emph`、`badge` 和线宽参数。
+
+---
+
 ## v1.9 — 2026-11-25
 
 **English**

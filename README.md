@@ -97,6 +97,8 @@ Both channels handle five kinds of request:
 ![A2 Components](docs/img/A2-components.png)
 *A2 · Components — source: [`A2-components.drawio`](docs/diagrams/A2-components.drawio)*
 
+**Reading A2:** orange numbered components (1–9) are the key design decisions, explained in the legend under the diagram. Coloured lines are the three key paths: green = channels in through the external API gateway, red = tool calls through MCP and the internal API gateway to systems of record, blue = every model call through the model gateway.
+
 | Component | Responsibility |
 |---|---|
 | **External API gateway** (the client's existing one, e.g. Apigee or Kong) | TLS, WAF, JWT validation against the IdP's JWKS, coarse scopes, rate limits, routing |

@@ -25,7 +25,7 @@ Baseline. History starts here; earlier work is folded into this version.
 - Guardrails, evaluation and testing, LLMOps (Git → pipeline → Langfuse), observability and CSAT, security checklist.
 - Known trade-offs, with ⭐ #1: user IDs differ across subsystems.
 - Appendix A: limits, timeouts, agent-loop caps and token budgets.
-- 30 draw.io diagrams generated from code; Chinese README (`README.zh-CN.md`) sharing the English diagrams.
+- 28 draw.io diagrams generated from code; Chinese README (`README.zh-CN.md`) sharing the English diagrams.
 
 **中文**
 - 与行业无关的通用核心加行业包，面向受监管行业；语音（Genesys）和聊天（App、Web、WhatsApp）共用同一个核心。
@@ -38,4 +38,4 @@ Baseline. History starts here; earlier work is folded into this version.
 - 护栏、评估与测试、LLMOps（Git → 流水线 → Langfuse）、可观测性与满意度、安全检查清单。
 - 已知取舍，⭐ 第 1 条：各子系统的用户 ID 不一致。
 - 附录 A：限制、超时、agent 循环上限与 token 预算。
-- 30 张由代码生成的 draw.io 图；中文 README（`README.zh-CN.md`）与英文版共用图。
+- 28 张由代码生成的 draw.io 图；中文 README（`README.zh-CN.md`）与英文版共用图。

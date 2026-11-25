@@ -8,6 +8,20 @@ Newest first. Each entry is written in English and Chinese. Diagram IDs refer to
 
 ---
 
+## v1.5 — 2026-11-25
+
+**English**
+- Section 15 restructured around how testing is done: 15.1 strategy (test layers + the three suites), 15.2 golden set (now with two case types and a YAML case schema), **15.3 agent simulation harness** (user simulator, voice path, mock backend with fault injection, four kinds of checks incl. end-state checks, k runs with pass^k for safety cases, simulator QA, coverage), **15.4 RAG evaluation** (≈1,000 question–evidence pairs with slices and traps; per-stage metrics and gates from ingestion to citations, abstention and latency; runs on every KB snapshot), 15.5 boundary and red team, 15.6 scoring, **15.7 replay and shadow mode** (2–4 weeks before launch), 15.8 cadence.
+- New diagram E3: agent simulation harness.
+- Section 5 links to the RAG evaluation; Appendix A and B links updated.
+
+**中文**
+- 第 15 节围绕"怎么测"重新组织：15.1 策略（测试分层 + 三套测试集），15.2 golden set（新增两种用例和 YAML 用例格式），**15.3 Agent 模拟测试框架**（用户模拟器、语音链路、可注入故障的模拟后端、四类检查含最终状态检查、跑 k 次且安全类要求 pass^k、模拟器质检、覆盖率），**15.4 RAG 评估**（约 1,000 组问题–证据，含切片和陷阱题；从入库到引用、拒答和延迟的分环节指标与闸门；每个知识库快照都要跑），15.5 边界与红队，15.6 评分，**15.7 回放与影子运行**（上线前 2–4 周），15.8 节奏。
+- 新图 E3：Agent 模拟测试框架。
+- 第 5 节链接到 RAG 评估；附录 A、B 的链接同步更新。
+
+---
+
 ## v1.4 — 2026-11-25
 
 **English**

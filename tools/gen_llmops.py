@@ -141,7 +141,7 @@ d.save(os.path.join(OUT, "E3-simulation-harness.drawio"))
 print("llmops done")
 
 # ======================= P1 Deployment profiles =======================
-d = Diagram("P1 Deployment Profiles", 1900, 880)
+d = Diagram("P1 Deployment Profiles", 1900, 960)
 d.text("P1 · Deployment profiles — same core, two ways to run it (pick one per client; never mix on the voice path)", 40, 10, 1400, 30, 16, True)
 core = d.box("<b>Shared core (identical in both profiles)</b><br>orchestrator (LangGraph) · RAG service · MCP tools · guardrails · model gateway · voice gateway<br>"
              "evaluation + LLMOps (Git → pipeline → Langfuse) · same prompts, evaluators, datasets, release bundle", 450, 60, 1000, 80, "core")
@@ -166,5 +166,8 @@ d.note("<b>Choosing a profile (with the client's compliance team, week one)</b><
        "• contracts: DPA, no training on customer data, retention, sub-processors<br>"
        "• existing estate: Genesys Cloud vs Engage, Alibaba Cloud footprint, GPU capacity<br>"
        "• cost: managed APIs (pay per use) vs GPUs (capex, DR doubles them)", 980, 680, 880, 110)
+d.box("<b>Local development (not a deployment profile)</b><br>"
+      "laptop: Ollama serves Qwen3-8B (quantised) through an OpenAI-compatible API · Zvec as an embedded vector store (dense + full-text, jieba)<br>"
+      "same application code via the model gateway · release evaluations always run on the production model (vLLM or Bailian)", 40, 820, 1820, 80, "edge")
 d.save(os.path.join(OUT, "P1-deployment-profiles.drawio"))
 print("profiles done")

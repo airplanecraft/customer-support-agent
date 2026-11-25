@@ -8,6 +8,22 @@ Newest first. Each entry is written in English and Chinese. Diagram IDs refer to
 
 ---
 
+## v1.7 — 2026-11-25
+
+**English**
+- **Local development** setup: Ollama on a laptop (Qwen3-8B, quantised) through an OpenAI-compatible API, so application code does not change. Development only; release evaluations still run on the production model on vLLM or Bailian (intro, section 6).
+- New **5.4 Vector store options**: Milvus (production), pgvector (phase 1 MVP) and **Zvec** (Alibaba's open-source in-process vector database) for local development, tests and read-only KB snapshots; a `VectorStore` interface keeps them swappable.
+- 15.9 test tooling, section 20 (#7 phase 1) and section 22 tech stack list Ollama and Zvec.
+- Diagrams: R3 model inventory gets a "Local dev only" row; P1 deployment profiles gets a local-development band.
+
+**中文**
+- **本地开发**方案：笔记本上用 Ollama 跑 Qwen3-8B 量化版，接口兼容 OpenAI，应用代码不用改。只用于开发；发布前的评估仍在 vLLM 或百炼上的生产模型上跑（简介、第 6 节）。
+- 新增 **5.4 向量库选项**：Milvus（生产）、pgvector（第一阶段 MVP），以及 **Zvec**（阿里开源的进程内向量数据库），用于本地开发、测试和只读知识库快照；用 `VectorStore` 接口保持可替换。
+- 15.9 测试工具、第 20 节（第 7 条第一阶段）和第 22 节技术栈加入 Ollama 和 Zvec。
+- 图：R3 模型清单新增"仅本地开发"一行；P1 部署形态新增本地开发一栏。
+
+---
+
 ## v1.6 — 2026-11-25
 
 **English**

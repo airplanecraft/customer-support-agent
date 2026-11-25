@@ -6,6 +6,8 @@
 - **云上：** 阿里云百炼（Model Studio），香港 region；
 - **本地（on-prem）：** 开源模型，在 vLLM 上自托管。
 
+**本地开发**（不是一种部署形态）时，工程师在笔记本上用 **Ollama** 跑同系列模型（Qwen3-8B 量化版），并用 **Zvec** 作为嵌入式向量库，不需要 GPU 服务器就能离线跑通整个 agent 流程。
+
 **通用核心 + 行业包（domain pack）。** 核心部分（渠道、编排、RAG、模型网关、身份、护栏、评估、LLMOps）与行业无关。每个行业只需加一个 *行业包*：意图、工具、知识来源、合规规则和审批流程。
 
 本设计面向 **受监管行业**（金融服务、医疗、电信、公用事业）。示例使用通用的 **账户、套餐、服务工单和带版本的产品条款**，包含语音身份核验以及账户变更的人工审批。
@@ -341,6 +343,19 @@ refund:
 
 **相关历史查询** 与检索并行执行：同一客户、同一意图和实体在最近 30 天内的记录。用于识别重复来访；同一工单第三次来电仍未解决时，会升级处理，而不是重复同样的回答。
 
+### 5.4 向量库选项
+
+| 选项 | 用在哪里 | 原因 |
+|---|---|---|
+| **Milvus** | 生产，两种部署形态都用（云上：Milvus 或 AnalyticDB 向量版） | 服务端部署，支持副本、按产品线分区，以及用 `kb_live` 别名发布知识库快照 |
+| **pgvector** | 第一阶段 MVP（[第 20 节](#20-已知取舍与待定问题)第 7 条） | 复用已有的 Postgres |
+| **Zvec**（阿里开源，Apache 2.0） | 本地开发和测试；也可用于小规模、以读为主的部署 | 进程内的库（`pip install zvec`），不用部署服务。支持稠密和稀疏向量、内置 jieba 的全文检索，以及一次查询内结合元数据过滤的混合检索；有预写日志保证持久化 |
+
+- Zvec 覆盖了 Milvus 的混合检索能力（向量检索、全文检索、过滤），所以检索代码和 RAG 评估（[15.4](#154-rag-评估)）可以在笔记本上对同一个知识库快照运行。
+- **限制：** 写入只能由一个进程进行，读取可以多进程。这适合入库任务生成、再分发到各个 pod 的**只读知识库快照**；不适合多个写入方共享的存储，所以生产仍用 Milvus。
+- 检索放在一个简单的 `VectorStore` 接口后面，Milvus、pgvector 和 Zvec 可以互换。用哪个由检索评估闸门决定，而不是由库本身决定。
+- Zvec 还比较新（v0.8）：要锁定版本，每次升级都重新跑检索评估。
+
 ---
 
 ## 6. 模型
@@ -373,7 +388,8 @@ refund:
 
 **部署。** 所有 LLM 和语音调用都经过我们自己的模型网关和语音网关，所以后端可以替换而不用改应用代码：
 - **云上形态：** 百炼（Qwen、Paraformer、CosyVoice），或客户阿里云香港 VPC 内的 vLLM；
-- **本地形态：** 同系列模型的开源权重跑在 vLLM 上，加 FunASR 和 CosyVoice。
+- **本地形态：** 同系列模型的开源权重跑在 vLLM 上，加 FunASR 和 CosyVoice；
+- **本地开发：** 笔记本上用 Ollama 提供同系列模型（Qwen3-8B 量化版），接口兼容 OpenAI，所以应用代码不用改。这只用于开发。量化方式和推理框架都和生产不同（工具调用解析、结构化输出、吞吐），所以发布前的评估一律在 vLLM 或百炼上的生产模型上跑。
 
 见 [第 19 节](#19-部署形态云上与本地)。
 
@@ -1065,7 +1081,7 @@ owner: compliance
 | 单元 | pytest、pytest-asyncio；**Hypothesis**（对护栏规则和解析器做基于属性的测试） | syrupy（快照） |
 | LangGraph 与 agent 单元 | LangChain 的 fake chat model（`GenericFakeChatModel`）返回固定输出；用 `InMemorySaver` 和 `InMemoryStore` 代替 Postgres | vcrpy / pytest-recording 回放录制的 LLM 响应 |
 | 契约与 API | **Pact**（消费方驱动的契约，包括错误码）；**Schemathesis**（根据 OpenAPI 做模糊测试）；**WireMock** 或 Prism 模拟核心系统 API | MCP Inspector |
-| 集成环境 | **Testcontainers**：Postgres + pgvector、Redis、Redpanda（兼容 Kafka）、Milvus、Keycloak、MinIO | 本地开发用 docker compose |
+| 集成环境 | **Testcontainers**：Postgres + pgvector、Redis、Redpanda（兼容 Kafka）、Milvus、Keycloak、MinIO | 本地开发用 docker compose；笔记本上不用容器和 GPU 时用 **Ollama**（Qwen3-8B）+ **Zvec** |
 | **身份** | 单元和契约：**mock-oauth2-server** + **PyJWT**（也用来伪造非法 token：`alg=none`、`aud` 不对、过期、未知 `kid`、ID token 冒充 access token）。CI 和每晚：**Keycloak** 容器（token exchange、CIBA、按角色和 `acr` 准备测试用户）。**预发布端到端：用客户真实的 IdP**，例如 Auth0 或 Entra ID 的测试租户 | BFF 跑 OpenID Foundation conformance suite |
 | Agent 评估与模拟 | **Langfuse** 的数据集、实验和 judge；我们的 **模拟测试框架**（[15.3](#153-agent-模拟测试框架)）；**agentevals**（轨迹匹配）；**openevals**（多轮模拟、LLM-as-judge） | DeepEval、Inspect AI |
 | RAG | **ranx** 或 pytrec_eval（Recall@k、MRR、nDCG）；**RAGAS**（context precision/recall、忠实度），judge 经我们的网关调用 | — |
@@ -1262,7 +1278,7 @@ owner: compliance
 | 4 | 粤语语音质量 | Paraformer、SenseVoice 和 CosyVoice 在行业术语、口音和中英夹杂上的表现，在本领域还没有验证 | 先上线聊天；语音以匿名化真实录音测得的字错率为闸门；热词表 |
 | 5 | 电话系统集成 | Genesys Cloud（AudioConnector）和 Engage 的机器人集成能力不同 | 语音网关做在适配层后面；在 Genesys 测试组织里验证具体的集成方式 |
 | 6 | IdP 能力 | 不是所有 IdP 都支持 token exchange 和 CIBA | 兜底方案：内部 token 服务签发短期 JWT，通过 JWKS 校验 |
-| 7 | 第一阶段范围 | 完整组件（Kafka、Milvus、service mesh、Langfuse）对 MVP 来说太重 | 第一阶段：聊天 + RAG（pgvector），不用 Kafka；随业务量增长再加语音、事件和 service mesh |
+| 7 | 第一阶段范围 | 完整组件（Kafka、Milvus、service mesh、Langfuse）对 MVP 来说太重 | 第一阶段：聊天 + RAG（pgvector，或用 Zvec 承载只读知识库快照），不用 Kafka；随业务量增长再加语音、事件和 service mesh |
 | 8 | 成本与灾备 | GPU 灾备会让硬件翻倍；托管 API 把成本转成按量计费 | 每种形态做成本模型；GPU 灾备用温备，降级时转人工 |
 | 9 | Trace 里的 PII | Langfuse trace 包含对话内容 | Trace 前先脱敏；加密、保留期和访问控制；原始归档只有合规能访问 |
 | 10 | LLM-as-judge 的可靠性 | Judge 会漂移，也可能和人的判断不一致 | 校准（κ ≥ 0.8），每月复查，每次发布比较时锁定 judge 版本 |
@@ -1297,7 +1313,7 @@ done
 
 ## 22. 技术栈
 
-LangGraph · LangChain · vLLM · Qwen3（32B / 8B / 30B-A3B）· Qwen3-Embedding · Qwen3-Reranker · Qwen2.5-VL · 阿里云百炼（Qwen、Paraformer、CosyVoice）· FunASR / SenseVoice · CosyVoice · Genesys Cloud CX / Engage（AudioConnector、Architect、Data Actions）· Milvus（向量 + BM25）· Postgres · Redis · Kafka · Kubernetes（CPU/GPU 节点池、KEDA、NVIDIA GPU Operator）· Istio/Linkerd（mTLS）· OIDC IdP（例如 Keycloak），支持 token exchange 和 CIBA · Apigee/Kong · Vault · cert-manager · Argo CD · Langfuse（prompt、数据集、LLM-as-judge、trace）· promptfoo / garak / PyRIT（红队）· ELK · Prometheus/Grafana · 测试：pytest · Hypothesis · Pact · Schemathesis · WireMock · Testcontainers · Keycloak · mock-oauth2-server · agentevals / openevals · ranx · RAGAS · FreeSWITCH / PJSIP · SIPp · jiwer · Playwright · Maestro · k6 · Locust · Chaos Mesh · Toxiproxy · OWASP ZAP · Trivy · Semgrep · Presidio
+LangGraph · LangChain · vLLM · Ollama（本地开发）· Qwen3（32B / 8B / 30B-A3B）· Qwen3-Embedding · Qwen3-Reranker · Qwen2.5-VL · 阿里云百炼（Qwen、Paraformer、CosyVoice）· FunASR / SenseVoice · CosyVoice · Genesys Cloud CX / Engage（AudioConnector、Architect、Data Actions）· Milvus（向量 + BM25）· Zvec（嵌入式向量库，本地开发）· Postgres · Redis · Kafka · Kubernetes（CPU/GPU 节点池、KEDA、NVIDIA GPU Operator）· Istio/Linkerd（mTLS）· OIDC IdP（例如 Keycloak），支持 token exchange 和 CIBA · Apigee/Kong · Vault · cert-manager · Argo CD · Langfuse（prompt、数据集、LLM-as-judge、trace）· promptfoo / garak / PyRIT（红队）· ELK · Prometheus/Grafana · 测试：pytest · Hypothesis · Pact · Schemathesis · WireMock · Testcontainers · Keycloak · mock-oauth2-server · agentevals / openevals · ranx · RAGAS · FreeSWITCH / PJSIP · SIPp · jiwer · Playwright · Maestro · k6 · Locust · Chaos Mesh · Toxiproxy · OWASP ZAP · Trivy · Semgrep · Presidio
 
 ---
 

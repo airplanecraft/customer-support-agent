@@ -261,7 +261,7 @@ d.note("Why hybrid: dense handles paraphrase (张单点解贵咗 ≈ why is my b
 d.save(os.path.join(OUT, "R2-hybrid-retrieval.drawio"))
 
 # ======================= R3 Model inventory (no edges) =======================
-d = Diagram("R3 Model Inventory", 1500, 900)
+d = Diagram("R3 Model Inventory", 1500, 1000)
 d.text("R3 · Model inventory — all Alibaba Qwen / Tongyi: Bailian in the cloud profile, open source on-prem", 40, 10, 1200, 30, 16, True)
 rows = [
     ("Voice in", [("Silero VAD", "end-of-speech · CPU"), ("Paraformer realtime (Bailian)", "STT · cloud profile"), ("FunASR / SenseVoice", "STT · on-prem profile (open source)")]),
@@ -272,12 +272,13 @@ rows = [
     ("Documents", [("PaddleOCR", "text extraction"), ("Qwen2.5-VL-7B", "receipt / report fields")]),
     ("Voice out", [("CosyVoice (Bailian)", "TTS · cloud profile"), ("CosyVoice 2 (open source)", "TTS · on-prem profile")]),
     ("Evaluate", [("Qwen3-8B judge", "online sampling (calibrated)"), ("Qwen3-32B + human", "offline release gate")]),
+    ("Local dev only", [("Ollama · Qwen3-8B (quantised)", "laptop · OpenAI-compatible API"), ("Zvec (embedded)", "dense + full-text (jieba) · dev / tests"), ("Release evals", "always on the production model")]),
 ]
 y = 60
 for stage, models in rows:
     d.box(f"<b>{stage}</b>", 40, y, 150, 70, "edge")
     for i, (m, desc) in enumerate(models):
-        zone = "data" if any(k in m for k in ("Milvus", "Rules", "PaddleOCR", "VAD")) else "model"
+        zone = "data" if any(k in m for k in ("Milvus", "Rules", "PaddleOCR", "VAD", "Zvec", "Release")) else "model"
         d.box(f"<b>{m}</b><br>{desc}", 220 + i * 330, y, 300, 70, zone)
     y += 95
 d.note("Small models for simple, latency-sensitive steps; 32B where citations and tool accuracy matter;<br>"

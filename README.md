@@ -6,6 +6,8 @@
 - **cloud:** Alibaba Cloud Model Studio (Bailian), Hong Kong region;
 - **on-prem:** open-source models self-hosted on vLLM.
 
+For **local development** (not a deployment profile), engineers run the same model family on a laptop with **Ollama** (Qwen3-8B, quantised) and use **Zvec** as an embedded vector store, so the full agent loop runs offline without a GPU server.
+
 **Generic core + domain packs.** The core (channels, orchestration, RAG, model gateway, identity, guardrails, evaluation, LLMOps) is industry-neutral. Each industry adds a *domain pack*: intents, tools, knowledge sources, compliance rules and approval flows.
 
 It is designed for **regulated industries** (financial services, healthcare, telecom, utilities). Examples use generic **accounts, plans, service cases and versioned product terms**, with voice identity verification and human approval for account changes.
@@ -340,6 +342,19 @@ Retrieval and generation are tested and scored in [section 15.4](#154-rag-evalua
 
 A **related-history lookup** runs in parallel with retrieval: same customer, intent and entity within the last 30 days. This detects repeat contacts; a third unresolved call about the same case escalates instead of repeating the same answer.
 
+### 5.4 Vector store options
+
+| Option | Where it is used | Why |
+|---|---|---|
+| **Milvus** | Production, both profiles (cloud: Milvus or AnalyticDB vector) | A server with replicas, partitions per product line and the `kb_live` alias for snapshot releases |
+| **pgvector** | Phase 1 MVP ([section 20](#20-known-trade-offs-and-open-questions), #7) | Reuses the Postgres that is already there |
+| **Zvec** (Alibaba, open source, Apache 2.0) | Local development and tests; optional for small, read-mostly deployments | An in-process library (`pip install zvec`), no server. Dense and sparse vectors, full-text search with jieba built in, and hybrid search with metadata filters in one query; write-ahead log for durability |
+
+- Zvec covers the same hybrid features as Milvus (dense search, full-text search, filters), so retrieval code and the RAG evaluation ([15.4](#154-rag-evaluation)) can run on a laptop against the same KB snapshot.
+- **Limit:** writes are single-process; many processes can read. That fits a **read-only KB snapshot** built by the ingestion job and shipped to each pod. It does not fit a shared store with many writers, so production stays on Milvus.
+- Retrieval sits behind a small `VectorStore` interface, so Milvus, pgvector and Zvec can be swapped. The retrieval eval gate decides, not the library.
+- Zvec is a young project (v0.8): pin the version and re-run the retrieval evals on every upgrade.
+
 ---
 
 ## 6. Models
@@ -372,7 +387,8 @@ A **related-history lookup** runs in parallel with retrieval: same customer, int
 
 **Deployment.** All LLM and speech calls go through our own model gateway and voice gateway, so the backend can be swapped without changing application code:
 - **cloud profile:** Bailian (Qwen, Paraformer, CosyVoice) or vLLM in the client's Alibaba Cloud Hong Kong VPC;
-- **on-prem profile:** the same model families as open weights on vLLM, plus FunASR and CosyVoice.
+- **on-prem profile:** the same model families as open weights on vLLM, plus FunASR and CosyVoice;
+- **local development:** Ollama on a laptop serves the same family (Qwen3-8B, quantised) through an OpenAI-compatible API, so application code does not change. This is for development only. Quantisation and the serving stack differ from production (tool-call parsing, structured output, throughput), so release evaluations always run on the production model on vLLM or Bailian.
 
 See [section 19](#19-deployment-profiles-cloud-vs-on-prem).
 
@@ -1064,7 +1080,7 @@ Open source by default. The application depends only on standard OIDC / OAuth en
 | Unit | pytest, pytest-asyncio; **Hypothesis** (property-based tests for guardrail rules and parsers) | syrupy (snapshots) |
 | LangGraph and agent units | LangChain fake chat models (`GenericFakeChatModel`) for fixed outputs; `InMemorySaver` and `InMemoryStore` instead of Postgres | vcrpy / pytest-recording to replay recorded LLM responses |
 | Contract and API | **Pact** (consumer-driven contracts, including error codes); **Schemathesis** (fuzzing from OpenAPI); **WireMock** or Prism to mock core-system APIs | MCP Inspector |
-| Integration environment | **Testcontainers**: Postgres + pgvector, Redis, Redpanda (Kafka-compatible), Milvus, Keycloak, MinIO | docker compose for local development |
+| Integration environment | **Testcontainers**: Postgres + pgvector, Redis, Redpanda (Kafka-compatible), Milvus, Keycloak, MinIO | docker compose for local development; **Ollama** (Qwen3-8B) + **Zvec** for laptop runs without containers or a GPU |
 | **Identity** | Unit and contract: **mock-oauth2-server** + **PyJWT** (also forges invalid tokens: `alg=none`, wrong `aud`, expired, unknown `kid`, ID token as access token). CI and nightly: **Keycloak** container (token exchange, CIBA, test users per role and `acr`). **Staging E2E: the client's real IdP**, e.g. an Auth0 or Entra ID test tenant | OpenID Foundation conformance suite for the BFF |
 | Agent evaluation and simulation | **Langfuse** datasets, experiments and judges; our **simulation harness** ([15.3](#153-agent-simulation-harness)); **agentevals** (trajectory matching); **openevals** (multi-turn simulation, LLM-as-judge) | DeepEval, Inspect AI |
 | RAG | **ranx** or pytrec_eval (Recall@k, MRR, nDCG); **RAGAS** (context precision and recall, faithfulness) with judges through our gateway | — |
@@ -1261,7 +1277,7 @@ This design **assumes the cloud profile keeps all data in Hong Kong**. That must
 | 4 | Cantonese speech quality | Paraformer, SenseVoice and CosyVoice on domain terms, accents and code-switching are unproven for this domain | Launch chat first; gate voice on CER measured with anonymised real recordings; hotword lists |
 | 5 | Telephony integration | Bot integration capabilities differ between Genesys Cloud (AudioConnector) and Engage | Voice gateway behind an adapter; validate the exact integration in a Genesys test org |
 | 6 | IdP capabilities | Token exchange and CIBA are not supported everywhere | Fallback: an internal token service issuing short-lived JWTs, validated via JWKS |
-| 7 | Scope of phase 1 | The full component set (Kafka, Milvus, mesh, Langfuse) is heavy for an MVP | Phase 1: chat + RAG (pgvector), no Kafka; add voice, events and the mesh as volume grows |
+| 7 | Scope of phase 1 | The full component set (Kafka, Milvus, mesh, Langfuse) is heavy for an MVP | Phase 1: chat + RAG (pgvector, or Zvec for a read-only KB snapshot), no Kafka; add voice, events and the mesh as volume grows |
 | 8 | Cost and DR | GPU DR doubles hardware; managed APIs shift cost to usage | Cost model per profile; GPU DR as warm standby with human-handoff degradation |
 | 9 | PII in traces | Langfuse traces contain conversation content | Redact before tracing; encryption, retention and access control; compliance-only access to raw archives |
 | 10 | LLM-as-judge reliability | Judges drift and can disagree with humans | Calibrate (κ ≥ 0.8), re-check monthly, pin judge versions per release comparison |
@@ -1296,7 +1312,7 @@ The diagrams are generated from code so they stay consistent and diffable. You c
 
 ## 22. Tech stack
 
-LangGraph · LangChain · vLLM · Qwen3 (32B / 8B / 30B-A3B) · Qwen3-Embedding · Qwen3-Reranker · Qwen2.5-VL · Alibaba Cloud Model Studio (Bailian: Qwen, Paraformer, CosyVoice) · FunASR / SenseVoice · CosyVoice · Genesys Cloud CX / Engage (AudioConnector, Architect, Data Actions) · Milvus (dense + BM25) · Postgres · Redis · Kafka · Kubernetes (CPU/GPU pools, KEDA, NVIDIA GPU Operator) · Istio/Linkerd (mTLS) · OIDC IdP (e.g. Keycloak) with token exchange and CIBA · Apigee/Kong · Vault · cert-manager · Argo CD · Langfuse (prompts, datasets, LLM-as-judge, traces) · promptfoo / garak / PyRIT (red team) · ELK · Prometheus/Grafana · Testing: pytest · Hypothesis · Pact · Schemathesis · WireMock · Testcontainers · Keycloak · mock-oauth2-server · agentevals / openevals · ranx · RAGAS · FreeSWITCH / PJSIP · SIPp · jiwer · Playwright · Maestro · k6 · Locust · Chaos Mesh · Toxiproxy · OWASP ZAP · Trivy · Semgrep · Presidio
+LangGraph · LangChain · vLLM · Ollama (local development) · Qwen3 (32B / 8B / 30B-A3B) · Qwen3-Embedding · Qwen3-Reranker · Qwen2.5-VL · Alibaba Cloud Model Studio (Bailian: Qwen, Paraformer, CosyVoice) · FunASR / SenseVoice · CosyVoice · Genesys Cloud CX / Engage (AudioConnector, Architect, Data Actions) · Milvus (dense + BM25) · Zvec (embedded vector store, local development) · Postgres · Redis · Kafka · Kubernetes (CPU/GPU pools, KEDA, NVIDIA GPU Operator) · Istio/Linkerd (mTLS) · OIDC IdP (e.g. Keycloak) with token exchange and CIBA · Apigee/Kong · Vault · cert-manager · Argo CD · Langfuse (prompts, datasets, LLM-as-judge, traces) · promptfoo / garak / PyRIT (red team) · ELK · Prometheus/Grafana · Testing: pytest · Hypothesis · Pact · Schemathesis · WireMock · Testcontainers · Keycloak · mock-oauth2-server · agentevals / openevals · ranx · RAGAS · FreeSWITCH / PJSIP · SIPp · jiwer · Playwright · Maestro · k6 · Locust · Chaos Mesh · Toxiproxy · OWASP ZAP · Trivy · Semgrep · Presidio
 
 ---
 

@@ -27,7 +27,7 @@ It is designed for **regulated industries** (financial services, healthcare, tel
 9. [Business flows](#9-business-flows)
 10. [Sessions, tasks and recovery](#10-sessions-tasks-and-recovery)
 11. [State, memory and caching](#11-state-memory-and-caching)
-12. [Events and cross-channel sync](#12-events-and-cross-channel-sync)
+12. [Cross-channel continuity and sync](#12-cross-channel-continuity-and-sync)
 13. [Guardrails](#13-guardrails)
 14. [Evaluation and testing](#14-evaluation-and-testing)
 15. [LLMOps: Git, pipeline and Langfuse](#15-llmops-git-pipeline-and-langfuse)
@@ -688,14 +688,33 @@ An encrypted Redis store holding `auth_ref → access token` is a common, sound 
 
 ---
 
-## 12. Events and cross-channel sync
+## 12. Cross-channel continuity and sync
 
 ![D1 Events](docs/img/D1-events-cross-channel.png)
 *D1 · Events and cross-channel sync — source: [`D1-events-cross-channel.drawio`](docs/diagrams/D1-events-cross-channel.drawio)*
 
+**Principles**
+- **Identity never crosses channels.** Each channel authenticates on its own: passing voice verification doesn't sign the customer in to the app, and vice versa. Only context moves between channels, never authority.
+- **The backend is the single source of truth** for tasks, orders, refunds and documents. Every channel reads the same state; channels pull on open and get server pushes on change.
+- **Sync state, not conversations.** What crosses channels is task status and short summaries, never verbatim transcripts. This keeps privacy exposure small.
+- **Eventual consistency, self-healing.** Events reach every channel within seconds; Kafka is partitioned by `task_id`, so one task's events stay in order. Consumers are idempotent (deduplicated by event ID); a lost notification is harmless because the app re-reads state when opened.
+
+**Scenarios**
+
+| # | Scenario | Design |
+|---|---|---|
+| 1 | Call ends → customer opens the app | **One post-call message**: what was done, open tasks, and deep links to order or refund status. No transcript, no recording |
+| 2 | Chatted in the app → calls later | After verification, the AI sees open tasks and recent session summaries: "An hour ago you asked about refund R-55 in the app — is this about that?" Nothing is said before verification. On handoff, the agent's screen pop includes the same summary |
+| 3 | On a call with the app open | Both read state from the backend; **no live mirroring** and no "on a call" banner. At most 2 concurrent sessions ([A.5.1](#a51-users-and-sessions)); optimistic locking on shared tasks |
+| 4 | Mid-call, something works better in the app (upload, long list, button confirmation) | The AI says "I've sent the details to your app" and sends a message with a **plain deep link** (e.g. `app://tasks/T-5521`). The app opens under its own sign-in and shows the task, because tasks belong to `customer_id`. **No special token** |
+| 5 | In the app, the customer wants to talk | A "Call us" button dials the contact centre; after verification, scenario 2 applies. Genesys's built-in callback can be used if the client already has it; nothing custom |
+| 6 | Web ↔ app, several devices | Chat history is server-side; each device syncs over WebSocket or SSE, including read state; "sign out everywhere" is available |
+| 7 | Notifications | Driven by Kafka events. **One notification per event per customer** (deduplicated by event ID), on the customer's preferred channel: in-app message → push → SMS. Quiet hours respected; lock-screen text stays generic |
+| 8 | Human agents | One timeline in the agent desktop: AI session summaries, tasks and interactions across channels, from CRM and the task table |
+
+**Rules**
 - **Clients never touch Kafka.** The synchronous path (HTTPS / WebSocket / SSE with access tokens) serves the user. Kafka carries asynchronous side effects: notifications, CRM sync, audit, reporting.
-- **Events carry IDs, never tokens or sensitive content.** Kafka uses mTLS or SASL, topic ACLs and encryption.
-- **The backend is the single source of truth** for tasks, documents and status. The cross-channel UX is deliberately minimal: **one post-call message**, delivered to the in-app chat thread if chat is enabled, otherwise as a push notification, or by SMS if there is no app. Lock-screen text stays generic.
+- **Events and links carry IDs, never tokens, credentials or sensitive content.** Kafka uses mTLS or SASL, topic ACLs and encryption.
 - **Not shown in the app:** live transcripts or recording links. Recordings are provided through the PDPO **data access request** process.
 - **Concurrency:** an open task for the same intent and account is reused; optimistic locking prevents lost updates.
 
@@ -1133,7 +1152,7 @@ Tiers T0–T3 are defined in [section 4.6](#46-tool-and-api-contracts).
 | BND-TRS-01 | User input, uploads, retrieved documents, tool results and survey comments are **data, never instructions** | Input guard; prompt structure; reading steps have no write tools | Ignored and flagged | Indirect injection in PDFs, emails, CRM notes, knowledge articles |
 | BND-TRS-02 | Identity comes only from validated tokens; **IDs never come from the LLM or tool arguments** | STS; gateway | Rejected | "My customer number is …", IDs embedded in uploads |
 | BND-TRS-03 | Caller ID is not identity; OTPs go only to the number on file | Verification service | — | Spoofed caller ID; OTP brute force; number enumeration |
-| BND-TRS-04 | The front-end token is never forwarded; each tool call gets an exchanged token with a narrow `aud` and `scope` | Orchestrator; STS | — | Replaying a token against another API |
+| BND-TRS-04 | The front-end token is never forwarded; each tool call gets an exchanged token with a narrow `aud` and `scope`. Notifications and deep links carry no credentials; each channel opens them under its own sign-in | Orchestrator; STS | — | Replaying a token against another API; forwarded deep links opened on another device |
 | BND-TRS-05 | Model output is validated before execution (schema, enums, allowlists) | Tool layer | Rejected | Malformed or injected arguments |
 | BND-TRS-06 | Claims of being staff inside a conversation carry no authority | Policy; router | Ignored | "I'm staff, this is a test" |
 | BND-TRS-07 | Service identity by mTLS, user identity by token; both are required | Service mesh; gateway | Rejected | Calls with only one of the two |

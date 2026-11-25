@@ -8,6 +8,20 @@ Newest first. Each entry is written in English and Chinese. Diagram IDs refer to
 
 ---
 
+## v1.2 — 2026-11-25
+
+**English**
+- Section 12 expanded and renamed **Cross-channel continuity and sync**: principles (identity never crosses channels, backend as single source of truth, sync state not conversations, eventual consistency), eight scenarios (call → app, app → call, both at once, send to app via plain deep link, "Call us", multi-device, notifications, agent timeline) and rules.
+- Deliberately simple: no continuation tokens, no live mirroring, no "on a call" banner, no custom callback.
+- BND-TRS-04 now also states that notifications and deep links carry no credentials.
+
+**中文**
+- 第 12 节扩写并改名为 **跨渠道衔接与同步**：原则（身份不跨渠道、后端是唯一事实来源、只同步状态不同步对话、最终一致）、八个场景（通话 → App、App → 通话、同时进行、用普通深链接发到 App、"致电客服"、多设备、通知、坐席时间线）以及规则。
+- 刻意保持简单：不做续办 token、不做实时镜像、不显示"正在通话"、不做定制回电。
+- BND-TRS-04 补充：通知和深链接不带任何凭证。
+
+---
+
 ## v1.1 — 2026-11-25
 
 **English**

@@ -140,7 +140,7 @@ Both channels handle five kinds of request:
 
 **North-south vs east-west traffic**
 - Clients come in through the **external API gateway**.
-- Our own services (orchestrator ↔ RAG ↔ MCP) talk **directly over the service mesh** (Istio or Linkerd) with automatic mTLS. Orchestrator → MCP is east-west traffic inside our namespace, so it does **not** pass the API gateway.
+- Our own services (orchestrator ↔ RAG ↔ MCP) talk **directly over the service mesh** (Istio; Linkerd only as a stable enterprise distribution) with automatic mTLS. Orchestrator → MCP is east-west traffic inside our namespace, so it does **not** pass the API gateway.
 - **Only calls to the client's core systems** cross a team boundary. Those go through the **client's internal API gateway**.
 - Databases are reached over their own protocols, locked down by NetworkPolicy and short-lived Vault credentials.
 
@@ -1429,13 +1429,21 @@ The diagrams are generated from code so they stay consistent and diffable. You c
 
 ## 22. Tech stack
 
-Versions are the latest releases checked on **2026-11-25** (PyPI, npm, GitHub releases, endoflife.date, Hugging Face). They are a starting point, not a requirement: pin exact versions in lockfiles, image digests and `models.yaml`, and upgrade only through the evaluation and release gates ([section 16](#16-llmops-git-pipeline-and-langfuse)). Testing tools are described per layer in [15.9](#159-test-tooling).
+Versions were checked on **2026-11-25** (PyPI, npm, GitHub releases, endoflife.date, Hugging Face) and chosen by this policy:
+
+1. **Stable releases only** in production: no alpha, beta, release candidate, nightly or edge builds.
+2. **No brand-new minor releases** for anything on the production path: use the latest patch of the newest release line that has had at least one patch release (for example PostgreSQL 18.7, not 19.0 released six days earlier). If a project never publishes patch releases (vLLM, PaddleOCR), use its newest release that is at least 14 days old.
+3. **The client's supported version wins** for platforms it runs (Kubernetes, PostgreSQL, Kafka, the API gateway).
+4. **Pre-1.0 projects** have no stable 1.x yet (vLLM, Zvec): pin the exact version and treat every minor upgrade as potentially breaking.
+5. **Testing and red-team tools** don't run in production, so they use the latest stable release.
+
+Exact versions are pinned in lockfiles, image digests and `models.yaml`, and upgraded only through the evaluation and release gates ([section 16](#16-llmops-git-pipeline-and-langfuse)). Testing tools are described per layer in [15.9](#159-test-tooling).
 
 | Category | Component | Version | What it does here |
 |---|---|---|---|
 | Orchestration | **LangGraph** | 1.2.24 | Agent graphs, checkpoints, human-in-the-loop interrupts, crash resume |
 | Orchestration | **LangChain** | 1.5.2 | Model and tool adapters, retrievers; fake chat models in unit tests |
-| LLMOps | **Langfuse (Python SDK)** | 5.2.0 | Prompt versions, datasets, LLM-as-judge experiments, traces |
+| LLMOps | **Langfuse (Python SDK)** | 5.0.4 | Prompt versions, datasets, LLM-as-judge experiments, traces |
 | Models | **Qwen3-32B** | HF `Qwen/Qwen3-32B` | Clause answers, multi-step agents, offline judge (AWQ INT4 or FP8) |
 | Models | **Qwen3-8B** | HF `Qwen/Qwen3-8B` | Intent, rewrite, sentiment, verification, summaries, online judge |
 | Models | **Qwen3-30B-A3B** | HF `Qwen/Qwen3-30B-A3B-Instruct-2507` | Optional low-latency voice (MoE, ~3B active) |
@@ -1443,31 +1451,31 @@ Versions are the latest releases checked on **2026-11-25** (PyPI, npm, GitHub re
 | Models | **Qwen3-Reranker** | HF `Qwen/Qwen3-Reranker-0.6B` (4B if evals justify) | Cross-encoder rerank of fused candidates |
 | Models | **Qwen2.5-VL** | HF `Qwen/Qwen2.5-VL-7B-Instruct` | Fields from receipts and reports (after OCR) |
 | Models | **Newer candidates** | Qwen3.5, Qwen3.8, Qwen3-VL-8B, Fun-CosyVoice3 | Not adopted by default; a swap goes through the golden set and release gates (section 16) |
-| Speech and documents | **Silero VAD** | 6.3 | End-of-speech detection on CPU in the voice gateway |
+| Speech and documents | **Silero VAD** | 6.2.3 | End-of-speech detection on CPU in the voice gateway |
 | Speech and documents | **FunASR + SenseVoice** | FunASR 1.4.29 · HF `FunAudioLLM/SenseVoiceSmall` | On-prem speech-to-text (Cantonese, Mandarin, English) |
 | Speech and documents | **CosyVoice 2** | GitHub v2.0 · HF `FunAudioLLM/CosyVoice2-0.5B` | On-prem text-to-speech |
 | Speech and documents | **PaddleOCR** | 3.7.0 | Text extraction from scans and photos |
 | Speech and documents | **Presidio** | presidio-analyzer 2.2.366 | PII detection and redaction (rules + NER, HKID recognisers), no LLM |
-| Model serving | **vLLM** | 0.34.0 | Production inference: OpenAI-compatible API, prefix caching, constrained decoding |
-| Model serving | **Ollama** | 0.40.18 | Local development only: Qwen3-8B (quantised) on a laptop |
+| Model serving | **vLLM** | 0.33.0 | Production inference: OpenAI-compatible API, prefix caching, constrained decoding |
+| Model serving | **Ollama** | 0.40.18 (development only, not production) | Local development only: Qwen3-8B (quantised) on a laptop |
 | Model serving | **Alibaba Cloud Model Studio (Bailian)** | Managed service (pin model snapshot names) | Cloud profile, Hong Kong region: Qwen, Paraformer realtime (STT), CosyVoice (TTS) |
 | Telephony | **Genesys Cloud CX / Engage** | SaaS / vendor-managed | IVR, ACD, AudioConnector, Architect flows, Data Actions, secure DTMF |
 | Data | **Milvus** | 3.0.6 (pymilvus 3.0.3) | Vector + BM25 (jieba) search, partitions, `kb_live` alias |
 | Data | **Zvec** | 0.8.1 | Embedded vector store for local development, tests and read-only KB snapshots |
-| Data | **PostgreSQL + pgvector** | 19.0 latest (use the client's DBA-supported major) · pgvector client 0.5.1 | Checkpoints, tasks, interactions, audit index; pgvector for phase 1 RAG and long-term memory |
-| Data | **Redis** | 8.12.0 | Sessions, OTP, rate limits, caches |
-| Data | **Apache Kafka** | 4.4.0 (KRaft) | Domain events, cross-channel sync, audit stream |
+| Data | **PostgreSQL + pgvector** | 18.7 (or the client's DBA-supported major; 19.0 is too new) · pgvector client 0.5.1 | Checkpoints, tasks, interactions, audit index; pgvector for phase 1 RAG and long-term memory |
+| Data | **Redis** | 8.10.3 | Sessions, OTP, rate limits, caches |
+| Data | **Apache Kafka** | 4.3.2 (KRaft) | Domain events, cross-channel sync, audit stream |
 | Platform | **Kubernetes** | 1.37.2 (or the client's supported version) | CPU and GPU node pools |
 | Platform | **KEDA** | 2.21.1 | Autoscale vLLM on queue depth, not CPU |
 | Platform | **NVIDIA GPU Operator** | 26.7.3 | GPU drivers, device plugin and monitoring on the cluster |
-| Platform | **Istio / Linkerd** | Istio 1.32.0 · Linkerd edge-26.11.2 | Service mesh: mTLS between services, fault injection in tests |
+| Platform | **Istio** | 1.31.4 (Linkerd only as a stable enterprise distribution; open-source Linkerd ships edge builds only) | Service mesh: mTLS between services, fault injection in tests |
 | Platform | **Argo CD** | 3.6.3 | GitOps deployment of the release bundle |
 | Security and identity | **Keycloak** | 26.8.2 | OIDC IdP for CI and reference setups (token exchange, CIBA) |
 | Security and identity | **Apigee / Kong** | Apigee: managed · Kong 3.9.5 | API gateway in front of core systems and MCP tools |
 | Security and identity | **HashiCorp Vault** | 2.2.2 | Secrets, dynamic credentials, signing keys |
 | Security and identity | **cert-manager** | 1.21.3 | Certificate issuance and rotation for mTLS |
 | Observability | **ELK (Elasticsearch)** | 9.5.7 | Redacted logs and the audit search index |
-| Observability | **Prometheus** | 3.16.0 | Metrics: latency, errors, GPU, vLLM queue, handoff rate |
+| Observability | **Prometheus** | 3.15.1 | Metrics: latency, errors, GPU, vLLM queue, handoff rate |
 | Observability | **Grafana** | 13.3.2 | Dashboards and alerts |
 | Red team | **promptfoo** | 0.126.0 | Prompt-injection and policy test suites in CI |
 | Red team | **garak** | 0.17.1 | LLM vulnerability scanning |

@@ -8,6 +8,20 @@ Newest first. Each entry is written in English and Chinese. Diagram IDs refer to
 
 ---
 
+## v1.12 — 2026-11-25
+
+**English**
+- Section 22 gets an explicit **version policy**: stable releases only; no brand-new minor releases on the production path (latest patch of the newest line that has had a patch, or the newest release at least 14 days old when a project ships no patches); the client's supported version wins; pre-1.0 projects pinned exactly; testing tools on latest stable.
+- Versions changed by the policy: PostgreSQL 19.0 → **18.7**, Redis 8.12.0 → **8.10.3**, Kafka 4.4.0 → **4.3.2**, Istio 1.32.0 → **1.31.4**, Prometheus 3.16.0 → **3.15.1**, vLLM 0.34.0 → **0.33.0**, Langfuse SDK 5.2.0 → **5.0.4**, Silero VAD 6.3 → **6.2.3**.
+- **Linkerd edge removed**: open-source Linkerd ships edge builds only, so the mesh is Istio, with Linkerd only as a stable enterprise distribution (section 3, section 22, diagram A3). Ollama marked development only.
+
+**中文**
+- 第 22 节新增明确的 **版本策略**：只用稳定版；生产路径上不用刚发布的新小版本（用已发过补丁的最新版本线上的最新补丁版；项目不发补丁版时，用发布至少 14 天的最新版本）；以客户支持的版本为准；未到 1.0 的项目锁定具体版本；测试工具用最新稳定版。
+- 按策略调整的版本：PostgreSQL 19.0 → **18.7**、Redis 8.12.0 → **8.10.3**、Kafka 4.4.0 → **4.3.2**、Istio 1.32.0 → **1.31.4**、Prometheus 3.16.0 → **3.15.1**、vLLM 0.34.0 → **0.33.0**、Langfuse SDK 5.2.0 → **5.0.4**、Silero VAD 6.3 → **6.2.3**。
+- **去掉 Linkerd edge**：开源 Linkerd 只发布 edge 版本，所以 service mesh 用 Istio，Linkerd 只用稳定的企业发行版（第 3 节、第 22 节、A3 图）。Ollama 标注为只用于开发。
+
+---
+
 ## v1.11 — 2026-11-25
 
 Fixes from a full review of the document.

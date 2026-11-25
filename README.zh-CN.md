@@ -142,7 +142,7 @@
 
 **南北向 vs 东西向流量**
 - 客户端通过 **外部 API 网关** 进来。
-- 我们自己的服务之间（编排器 ↔ RAG ↔ MCP）**直接走 service mesh**（Istio 或 Linkerd），自动 mTLS。编排器 → MCP 是我们命名空间内的东西向流量，所以 **不经过** API 网关。
+- 我们自己的服务之间（编排器 ↔ RAG ↔ MCP）**直接走 service mesh**（Istio；Linkerd 只用稳定的企业发行版），自动 mTLS。编排器 → MCP 是我们命名空间内的东西向流量，所以 **不经过** API 网关。
 - **只有调用客户核心系统** 时才跨越团队边界，这些调用走 **客户的内部 API 网关**。
 - 数据库用各自的协议访问，用 NetworkPolicy 和 Vault 签发的短期凭证锁死。
 
@@ -1430,45 +1430,53 @@ done
 
 ## 22. 技术栈
 
-版本号是 **2026-11-25** 查到的最新发布版本（来源：PyPI、npm、GitHub releases、endoflife.date、Hugging Face）。它们只是起点，不是硬性要求：在锁文件、镜像 digest 和 `models.yaml` 里锁定具体版本，升级必须通过评估和发布闸门（[第 16 节](#16-llmops-git-流水线与-langfuse)）。测试工具按层的说明见 [15.9](#159-测试工具)。
+版本号于 **2026-11-25** 查询（来源：PyPI、npm、GitHub releases、endoflife.date、Hugging Face），按以下策略选择：
+
+1. 生产 **只用稳定版**：不用 alpha、beta、候选版（RC）、nightly 或 edge 版本。
+2. 生产路径上的组件 **不用刚发布的新小版本**：用最新一条"已经发过至少一个补丁"的版本线上的最新补丁版（例如用 PostgreSQL 18.7，而不是六天前才发布的 19.0）。如果项目从不发布补丁版（vLLM、PaddleOCR），就用发布至少 14 天的最新版本。
+3. 客户自己运维的平台（Kubernetes、PostgreSQL、Kafka、API 网关）**以客户支持的版本为准**。
+4. **还没到 1.0 的项目**（vLLM、Zvec）没有稳定的 1.x：锁定具体版本，每次小版本升级都当作可能有破坏性变更。
+5. **测试和红队工具** 不在生产运行，用最新稳定版即可。
+
+具体版本锁定在锁文件、镜像 digest 和 `models.yaml` 里，升级必须通过评估和发布闸门（[第 16 节](#16-llmops-git-流水线与-langfuse)）。测试工具按层的说明见 [15.9](#159-测试工具)。
 
 | 类别 | 组件 | 版本 | 在本设计中的用途 |
 |---|---|---|---|
 | 编排 | **LangGraph** | 1.2.24 | Agent 图、checkpoint、人工审批中断、崩溃后恢复 |
 | 编排 | **LangChain** | 1.5.2 | 模型和工具适配、检索器；单元测试用假模型 |
-| LLMOps | **Langfuse (Python SDK)** | 5.2.0 | Prompt 版本、数据集、LLM-as-judge 实验、trace |
+| LLMOps | **Langfuse (Python SDK)** | 5.0.4 | Prompt 版本、数据集、LLM-as-judge 实验、trace |
 | 模型 | **Qwen3-32B** | HF `Qwen/Qwen3-32B` | 条款回答、多步 agent、离线 judge（AWQ INT4 或 FP8） |
 | 模型 | **Qwen3-8B** | HF `Qwen/Qwen3-8B` | 意图、改写、情绪、校验、摘要、在线 judge |
 | 模型 | **Qwen3-30B-A3B** | HF `Qwen/Qwen3-30B-A3B-Instruct-2507` | 可选的低延迟语音（MoE，约 3B 激活参数） |
-| 模型 | **Qwen3-Embedding** | HF `Qwen/Qwen3-Embedding-0.6B`（评估证明需要时用 4B） | 检索和语义缓存用的稠密向量 |
-| 模型 | **Qwen3-Reranker** | HF `Qwen/Qwen3-Reranker-0.6B`（评估证明需要时用 4B） | 对融合后的候选做交叉编码重排 |
+| 模型 | **Qwen3-Embedding** | HF `Qwen/Qwen3-Embedding-0.6B` （评估证明需要时用 4B） | 检索和语义缓存用的稠密向量 |
+| 模型 | **Qwen3-Reranker** | HF `Qwen/Qwen3-Reranker-0.6B` （评估证明需要时用 4B） | 对融合后的候选做交叉编码重排 |
 | 模型 | **Qwen2.5-VL** | HF `Qwen/Qwen2.5-VL-7B-Instruct` | 从收据和报告中抽字段（OCR 之后） |
-| 模型 | **较新的候选模型** | Qwen3.5、Qwen3.8、Qwen3-VL-8B、Fun-CosyVoice3 | 默认不采用；替换必须通过 golden set 和发布闸门（第 16 节） |
-| 语音与文档 | **Silero VAD** | 6.3 | 语音网关里在 CPU 上检测说话结束 |
+| 模型 | **Newer candidates** | Qwen3.5, Qwen3.8, Qwen3-VL-8B, Fun-CosyVoice3 | 默认不采用；替换必须通过 golden set 和发布闸门（第 16 节） |
+| 语音与文档 | **Silero VAD** | 6.2.3 | 语音网关里在 CPU 上检测说话结束 |
 | 语音与文档 | **FunASR + SenseVoice** | FunASR 1.4.29 · HF `FunAudioLLM/SenseVoiceSmall` | 本地语音转文字（粤语、普通话、英语） |
 | 语音与文档 | **CosyVoice 2** | GitHub v2.0 · HF `FunAudioLLM/CosyVoice2-0.5B` | 本地文字转语音 |
 | 语音与文档 | **PaddleOCR** | 3.7.0 | 从扫描件和照片中提取文字 |
 | 语音与文档 | **Presidio** | presidio-analyzer 2.2.366 | PII 检测与脱敏（规则 + NER、HKID 识别器），不用 LLM |
-| 模型服务 | **vLLM** | 0.34.0 | 生产推理：OpenAI 兼容接口、前缀缓存、约束解码 |
-| 模型服务 | **Ollama** | 0.40.18 | 只用于本地开发：笔记本上跑 Qwen3-8B 量化版 |
+| 模型服务 | **vLLM** | 0.33.0 | 生产推理：OpenAI 兼容接口、前缀缓存、约束解码 |
+| 模型服务 | **Ollama** | 0.40.18 （只用于开发，不用于生产） | 只用于本地开发：笔记本上跑 Qwen3-8B 量化版 |
 | 模型服务 | **Alibaba Cloud Model Studio (Bailian)** | 托管服务（锁定模型快照名） | 云上形态，香港 region：Qwen、Paraformer 实时（STT）、CosyVoice（TTS） |
 | 电话 | **Genesys Cloud CX / Engage** | SaaS / 厂商托管 | IVR、ACD、AudioConnector、Architect 流程、Data Actions、安全 DTMF |
 | 数据 | **Milvus** | 3.0.6 (pymilvus 3.0.3) | 向量 + BM25（jieba）检索、分区、`kb_live` 别名 |
 | 数据 | **Zvec** | 0.8.1 | 嵌入式向量库，用于本地开发、测试和只读知识库快照 |
-| 数据 | **PostgreSQL + pgvector** | 19.0 最新版（生产用客户 DBA 支持的大版本） · pgvector 客户端 0.5.1 | Checkpoint、任务、交互记录、审计索引；pgvector 用于第一阶段 RAG 和长期记忆 |
-| 数据 | **Redis** | 8.12.0 | 会话、OTP、限流、缓存 |
-| 数据 | **Apache Kafka** | 4.4.0 (KRaft) | 领域事件、跨渠道同步、审计流 |
+| 数据 | **PostgreSQL + pgvector** | 18.7 （或客户 DBA 支持的大版本；19.0 太新） · pgvector 客户端 0.5.1 | Checkpoint、任务、交互记录、审计索引；pgvector 用于第一阶段 RAG 和长期记忆 |
+| 数据 | **Redis** | 8.10.3 | 会话、OTP、限流、缓存 |
+| 数据 | **Apache Kafka** | 4.3.2 (KRaft) | 领域事件、跨渠道同步、审计流 |
 | 平台 | **Kubernetes** | 1.37.2 （或客户支持的版本） | CPU 和 GPU 节点池 |
 | 平台 | **KEDA** | 2.21.1 | 按 vLLM 队列深度扩缩容，而不是 CPU |
 | 平台 | **NVIDIA GPU Operator** | 26.7.3 | 集群上的 GPU 驱动、设备插件和监控 |
-| 平台 | **Istio / Linkerd** | Istio 1.32.0 · Linkerd edge-26.11.2 | Service mesh：服务间 mTLS、测试时注入故障 |
+| 平台 | **Istio** | 1.31.4 （Linkerd 只用稳定的企业发行版；开源 Linkerd 只发布 edge 版本） | Service mesh：服务间 mTLS、测试时注入故障 |
 | 平台 | **Argo CD** | 3.6.3 | 用 GitOps 部署发布包 |
 | 安全与身份 | **Keycloak** | 26.8.2 | CI 和参考环境用的 OIDC IdP（token exchange、CIBA） |
 | 安全与身份 | **Apigee / Kong** | Apigee：托管 · Kong 3.9.5 | 核心系统和 MCP 工具前面的 API 网关 |
 | 安全与身份 | **HashiCorp Vault** | 2.2.2 | 密钥、动态凭据、签名密钥 |
 | 安全与身份 | **cert-manager** | 1.21.3 | mTLS 证书签发和轮换 |
 | 可观测性 | **ELK (Elasticsearch)** | 9.5.7 | 脱敏后的日志和审计检索索引 |
-| 可观测性 | **Prometheus** | 3.16.0 | 指标：延迟、错误、GPU、vLLM 队列、转人工率 |
+| 可观测性 | **Prometheus** | 3.15.1 | 指标：延迟、错误、GPU、vLLM 队列、转人工率 |
 | 可观测性 | **Grafana** | 13.3.2 | 看板和告警 |
 | 红队 | **promptfoo** | 0.126.0 | CI 里的 prompt 注入和策略测试集 |
 | 红队 | **garak** | 0.17.1 | LLM 漏洞扫描 |

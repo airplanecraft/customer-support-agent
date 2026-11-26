@@ -914,6 +914,36 @@ An encrypted Redis store holding `auth_ref → access token` is a common, sound 
 
 **Long pauses don't keep tokens alive.** Approvals use the approver's own token ([section 9](#9-business-flows), C4); a task never stores a token.
 
+### 11.6 Data classification and what the model sees
+
+Once linked to a customer, balances and orders are personal data too, so "no PII in the LLM" can't be taken literally: the model has to read amounts to explain a bill. Instead, every field has a class, and each class says what the model may see and what logs and traces keep. The LLM runs in our own environment or in-region, so the risks being managed are **logs and traces kept too long or too widely, one customer's data spoken to another, injection-driven exfiltration, and high-impact identifiers leaking**.
+
+| Class | Fields | What the model sees | What logs and traces keep |
+|---|---|---|---|
+| **C0 Public** | Product terms, fee tables, policies | Clear text | Clear text |
+| **C1 Business data** (personal, but needed to serve) | Plan names, bill line items, amounts, order IDs, product names, dates, statuses, case progress, refund amounts | **Clear text, minimum necessary**: only the summary fields a tool returns ([section 4.6](#46-tool-and-api-contracts)) | Clear text, role-based access, retention limits |
+| **C2 Direct identifiers and contact data** | Name, phone, email, postal address, date of birth | **Placeholders only** (`<NAME_1>`, `<ADDR_1>`, `<PHONE_1>`); **masked forms** are allowed to tell several of one customer's values apart (phone ending 5186, district-level address) | Placeholders only |
+| **C3 Secrets and high-impact identifiers** | National ID numbers, full card or bank account numbers, OTPs, passwords | **Never.** Entered only by DTMF or structured forms; never spoken or shown in full | Never |
+
+**Inbound text.** Whatever the customer types or says is scanned before the LLM (Presidio + regex; voice transcripts too). C2 values are replaced by placeholders; the mapping lives in a **per-session vault**. C3 values are removed and the customer is steered to DTMF or a form.
+
+**Names are placeholders too.** Greetings and forms of address ("Good morning, Mr Chan") come from templates, not from the model.
+
+**Putting real values back, never through the LLM**
+1. **Write confirmations and read-backs** (address change, order, cancellation, refund) are rendered **by template from the real values stored in the confirmation service** ([section 4.6](#46-tool-and-api-contracts)); the model never sees them.
+2. **C2 placeholders in conversational replies** ("it was delivered to `<ADDR_1>`") are filled in by a **deterministic output renderer** just before TTS or display:
+   - only placeholders created **in this session**, from this session's vault;
+   - **C2 only; C3 is never filled in**;
+   - the output guard rejects unresolved placeholders and placeholders from another session;
+   - logs and traces keep the version **before** rendering.
+
+**Elsewhere**
+- **Tools** resolve placeholders from the vault inside the tool, so servicing such as an address change still works.
+- **Long-term memory** holds no C2 or C3, and as little C1 as possible (facts are read live anyway).
+- **Per-call records** store the request actually sent to the model, i.e. with C2 as placeholders.
+- **Agent console** shows real values, masked per role; agents are authorised for the assigned interaction ([section 13](#13-human-handoff-and-agent-console)).
+- **Region:** in the cloud profile, C1 reaches the in-region model service under the data-processing agreement; nothing leaves the region.
+
 ---
 
 ## 12. Cross-channel continuity and sync
@@ -1045,7 +1075,7 @@ Defence in depth: any layer can refuse, require step-up, or hand off to a human,
 
 | Layer | Checks |
 |---|---|
-| 1 · Input | Length (≤ 1,000 characters), rate limits per user and client, PII redacted in logs and traces; **pseudonymised for the LLM** (reversible placeholders such as `<ADDR_1>`, real values held in a per-session vault and substituted only inside tools); ID and card numbers never reach the LLM (DTMF or structured forms); injection classifier, uploads scanned (AV + CDR) with only the clean copy used, external text treated as data rather than instructions |
+| 1 · Input | Length (≤ 1,000 characters), rate limits per user and client, data handled by class ([section 11.6](#116-data-classification-and-what-the-model-sees)): C1 business data in clear, minimum necessary; **C2 identifiers and contact data as placeholders** such as `<ADDR_1>` (per-session vault); **C3 secrets and national ID or card numbers never reach the LLM** (DTMF or structured forms); injection classifier, uploads scanned (AV + CDR) with only the clean copy used, external text treated as data rather than instructions |
 | 2 · Identity and routing | Token `aud`, `scope` and `acr`; role → reachable agents; assurance level per intent (verify or step-up); tools = agent allowlist ∩ role; loop and token caps ([Appendix A](#appendix-a-system-boundaries)) |
 | 3 · Retrieval | Filters built from the token (visibility by role, clause version by contract start date, `owner_id`), never from the model |
 | 4 · Tools | Token exchange with a narrow `aud` and `scope`; ownership check plus row-level security; write tools that only create drafts; idempotency keys; prepare → confirm (by the channel, not the model) → commit for T1 writes; human approval via `interrupt()`; refunds only to the original payment method, decided by the rules engine; never change phone or bank account |
@@ -1440,7 +1470,7 @@ All three are correlated by `trace_id`.
   - images re-encoded (which also strips EXIF) and PDFs disarmed;
   - only the clean copy reaches OCR or the models;
   - **never public scanners** such as VirusTotal.
-- **PII:** redacted in logs and traces; pseudonymised with reversible placeholders before the LLM, with real values substituted only inside tools (servicing such as an address change still works); ID and card numbers only by DTMF or structured forms, never through the LLM; field masking per role.
+- **PII:** handled by data class ([section 11.6](#116-data-classification-and-what-the-model-sees)). C1 in clear for the model, minimum necessary; C2 as placeholders, filled in only by templates or the session's output renderer; C3 never reaches the model and only by DTMF or structured forms; logs and traces keep C2 as placeholders; field masking per role.
 - **Abuse:** rate limits per client and per user; alerts on OTP failures and repeated lookups across customers.
 - **Secrets:** Vault; dynamic database credentials; certificates managed by cert-manager or Vault with expiry alerts.
 - **Telephony integration:** Genesys AudioConnector signed handshake and API key; Data Action credentials stored in Genesys and rotated; idempotent handling.
@@ -1676,7 +1706,7 @@ Tiers T0–T3 are defined in [section 4.6](#46-tool-and-api-contracts).
 | BND-DAT-01 | **No personal data before verification** | Permission layer; trace rule | Verify or step-up | Pre-verification lookups; yes/no probing ("is my balance above 1,000?") |
 | BND-DAT-02 | Only the caller's own data; ownership checked on every ID (BOLA) | STS / gateway / row-level security | Generic refusal | Other customers' order IDs; enumeration |
 | BND-DAT-03 | Partners see only their own book, with masked fields | Row-level security + masking | Masked or refused | Querying another agent's clients |
-| BND-DAT-04 | PII never reaches the LLM, logs or traces in clear (the LLM sees placeholders; tools substitute real values); full ID or card numbers are never spoken or displayed | Redaction; output PII check | Redacted or dropped | "Repeat my HKID", exfiltration through formatting or spelling |
+| BND-DAT-04 | Data reaches the model only as its class allows ([11.6](#116-data-classification-and-what-the-model-sees)): **C3 never**; C2 only as placeholders, filled in by templates or the session's output renderer (never C3, never another session's); C1 only the minimum fields a tool returns. Logs and traces keep C2 as placeholders; full ID or card numbers are never spoken or displayed | Input pseudonymiser; per-session vault; output renderer and PII check | Redacted or dropped | "Repeat my HKID"; exfiltration through formatting or spelling; extracting the placeholder mapping; injecting another session's placeholder; rebuilding a full value from its masked form |
 | BND-DAT-05 | System prompt, internal guidelines and other customers' memories are never disclosed | Output guard; RAG visibility filters | Refuse | Prompt extraction; "what did the last caller ask?" |
 | BND-DAT-06 | Long-term memory is read only from the caller's namespace, taken from the token | `Store` namespace | — | Memory bleed between customers |
 | BND-DAT-07 | Data stays in the region profile's jurisdiction or on-prem; no public internet LLM APIs (managed models only in-region, via a private endpoint, [section 19](#19-deployment-profiles-cloud-vs-on-prem)) | Egress network policy; model gateway | Blocked | Config audit; egress tests |

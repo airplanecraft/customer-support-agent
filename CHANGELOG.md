@@ -8,6 +8,22 @@ Newest first. Each entry is written in English and Chinese. Diagram IDs refer to
 
 ---
 
+## v1.19 — 2026-11-26
+
+**English**
+- **Fix: the PII boundary was too broad.** "PII never reaches the LLM in clear" contradicted bill explanations, order lookups and the amount check, and no one had defined which fields count or who renders read-backs.
+- New **11.6 Data classification and what the model sees**: C0 public (clear); **C1 business data** — amounts, line items, orders, statuses — clear for the model, minimum necessary; **C2 identifiers and contact data** — name, phone, email, address, DOB — placeholders only, masked forms allowed to tell values apart; **C3 secrets and national ID / card numbers** — never.
+- Names are placeholders; greetings come from templates. Real values go back only through **confirmation-service templates** (writes) or a **deterministic output renderer** (this session's C2 only, never C3); logs and traces keep the pre-render version.
+- BND-DAT-04 rewritten by class, with new red-team cases (placeholder-mapping extraction, cross-session placeholders, rebuilding values from masked forms); guardrail layer 1 and the security checklist now point to 11.6.
+
+**中文**
+- **修复：PII 边界写得太宽。** "PII 明文永不进入 LLM"和账单解释、订单查询、金额核对相互矛盾，也没定义哪些字段算 PII、回读由谁渲染。
+- 新增 **11.6 数据分级与模型可见性**：C0 公开（明文）；**C1 业务数据**（金额、明细、订单、状态）对模型明文、只给必要的；**C2 身份与联系信息**（姓名、手机、邮箱、地址、出生日期）只给占位符，允许打码形式用于区分；**C3 秘密、证件号和卡号** 永不进入。
+- 姓名也用占位符，问候由模板生成。真实值只通过 **确认服务的模板**（写操作）或 **确定性的输出渲染器**（只限本会话的 C2，从不填 C3）换回；日志和 trace 保存渲染前的版本。
+- BND-DAT-04 按级别重写，新增红队测试（套取占位符对照表、跨会话占位符、从打码形式反推）；护栏第 1 层和安全清单改为引用 11.6。
+
+---
+
 ## v1.18 — 2026-11-26
 
 **English**

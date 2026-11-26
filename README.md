@@ -83,7 +83,7 @@ Both channels handle five kinds of request:
 | Data residency | Customer data, recordings and transcripts stay in the region profile's jurisdiction (on-prem, or a private cloud region there), under that region's data law (e.g. PIPL, PDPO, GDPR). No public internet LLM APIs in production; managed models only in-region and only under the conditions in [section 19](#19-deployment-profiles-cloud-vs-on-prem). |
 | Languages | Per region profile: e.g. Mandarin (mainland China); Cantonese and English, often code-switched within one sentence (Hong Kong) |
 | Volume | About 20k chats per day (400 concurrent at peak) and 6k calls per day (120 concurrent at peak); about 20k documents in the knowledge base |
-| Latency | Voice: roughly 1 second from end of speech to first audio. Chat: first token within 1–2 seconds |
+| Latency | Voice: first audio ≤ 1 s, first substantive answer ≤ 1.8–3.5 s depending on the path (P95, [section 7](#7-channels-voice-vs-chat)). Chat: first token within 1–2 seconds |
 | Accuracy | Zero binding commitments; per-sentence citations; the version-correct clause must be used |
 | Audit | Every answer must be traceable to the prompt, model, retrieval config and clause version used. Records are retained per regulatory policy. |
 
@@ -173,7 +173,7 @@ In Anthropic's terms this is a **workflow, not an autonomous agent**: a routing 
 | Decision | Who decides |
 |---|---|
 | Nodes and edges of the graph | Programmer (built from config at startup; the shape never changes at runtime) |
-| Which intents the customer expressed | LLM (Qwen3-8B), constrained to a fixed enum with `response_format` |
+| Which intents the customer expressed | LLM (Qwen3-8B), constrained to a fixed enum with `response_format`; **the same call returns the rewritten search queries** |
 | Whether role and assurance level are sufficient | Code |
 | Which tools a worker calls, and in what order | LLM, limited to that worker's allowlist and loop caps (4 iterations in chat, 2 on voice; [Appendix A](#appendix-a-system-boundaries)) |
 | Whether a tool call may execute | Code inside the tool or MCP server (token, scope, acr, ownership) |
@@ -422,7 +422,7 @@ refund:
 
 | Step | Detail |
 |---|---|
-| Rewrite | Qwen3-8B turns colloquial Cantonese into search terms and splits multi-part questions |
+| Rewrite | Returned by the **same Qwen3-8B call as routing**: colloquial Cantonese turned into search terms, multi-part questions split. Retrieval may already have started on the partial transcript |
 | Exact match | Explicit clause numbers or product codes hit a metadata filter directly |
 | Dense search | Qwen3-Embedding (query with instruction), ANN top-30 |
 | BM25 | Milvus built-in full-text search with the jieba analyzer, top-30. It catches clause numbers, product codes and technical terms that dense search misses. |
@@ -494,7 +494,7 @@ See [section 19](#19-deployment-profiles-cloud-vs-on-prem).
 |---|---|---|
 | Identity | SSO session (OIDC) | Just-in-time **SMS OTP to the registered mobile + date of birth via DTMF**, collected in a **Genesys secure flow** and checked through a Data Action |
 | Answer style | Full answer, lists, clause links, citations | At most 3 sentences, spoken style; citations logged, not read aloud; "I'll send the details to your app" |
-| Latency | First token in 1–2 s | About 1 s from end of speech: streaming STT → LLM → sentence-chunked TTS |
+| Latency | First token in 1–2 s | First audio ≤ 1 s; first substantive answer 1.8–3.5 s by path (below): streaming STT → LLM → sentence-chunked TTS |
 | Interruptions | — | **Barge-in:** stop playback, clear the AudioConnector playback buffer, cancel generation |
 | Multiple questions | Answered together with numbered points | Split into intents, answered one at a time, at most 5 per call |
 | Limits | Reminder at 15 min idle, close at 60 min; max 1,000 characters per message enforced server-side (no silent truncation) | At most 10 min of AI handling; silence prompt after 8 s, hang up after 16 s; at most 2 reprompts, then a DTMF menu or a human |
@@ -502,15 +502,39 @@ See [section 19](#19-deployment-profiles-cloud-vs-on-prem).
 | Sensitive data | Masked inputs | DTMF only; never in transcripts, recordings or the LLM |
 | Handoff | Chat thread to a human agent | Back to a **Genesys ACD queue** with the `handoff_id` as participant data → the agent console loads the packet ([section 13](#13-human-handoff-and-agent-console)) |
 
-**Voice latency budget (approximate):** VAD 200–300 ms · final STT 100–200 ms · routing and retrieval 150–300 ms · LLM first token 200–400 ms · **first-sentence check 10–150 ms** ([section 14](#14-guardrails)) · first TTS audio 100–200 ms. **That adds up to roughly 0.75–1.5 s, so the ~1 s target is not met by default**; it depends on the mitigations below. Mitigations:
-- stream every stage;
-- use 8B or MoE for simple turns;
-- prefix caching;
-- start retrieval on partial transcripts;
-- pre-synthesised fillers ("Let me check that for you");
-- voice requests get priority over chat in the model gateway;
-- the first sentence gets the deterministic rules only (≈ 10 ms); the fast 8B check runs on each later sentence while the previous one is playing;
-- for high-risk intents (eligibility, cases), a filler plays while the whole answer is verified (trade-off 2 in [section 20](#20-known-trade-offs-and-open-questions)).
+**Voice latency: four metrics, not one.** "First audio within ~1 s" alone is met by a filler and says nothing about when the answer arrives, so voice is measured four ways (P95 targets, starting points):
+
+| Metric | Meaning | Target |
+|---|---|---|
+| **Time to first audio** (TTFA) | End of speech → any audio, filler included | ≤ 1.0 s |
+| **Time to first substantive answer** (TTFSA) | End of speech → the first sentence that contains answer content | Per path, below |
+| **Filler rate** | Share of turns that needed a filler | ≤ 30% overall; ≤ 10% for simple FAQ |
+| **Dead air** | Longest silence after end of speech | Never > 1.2 s; after a filler, the next audio within 3 s (or "still checking") |
+
+**Budget per path (ms, P95).** Timeouts in [Appendix A.5.6](#a56-model-retrieval-and-tool-latency) are upper limits, not budgets.
+
+| Stage | ① FAQ / RAG | ② Tool intent (e.g. account lookup) | ③ High-risk: whole answer verified first |
+|---|---|---|---|
+| VAD end of turn | 200–300 | 200–300 | 200–300 |
+| Final STT | 100–200 | 100–200 | 100–200 |
+| **One 8B call: intents + rewritten queries** | 150–250 | 150–250 | 150–250 |
+| Retrieval + rerank | **≤ 250**, started early on the partial transcript | — | ≤ 250 |
+| Read API | — | **≤ 800** (latency SLO; 2 s is the timeout) | as needed |
+| LLM first token | 200–400 | 200–400 | Full answer ≈ 800–1,500 |
+| First-sentence check ([section 14](#14-guardrails)) | ≈ 10 (rules) | ≈ 10 | Whole-answer verification 200–400 |
+| First TTS audio | 100–200 | 100–200 | 100–200 |
+| **TTFSA target** | **≤ 1.8 s** | **≤ 2.5 s** | **≤ 3.5 s** |
+| Filler | Usually none | If nothing substantive by 1 s | Always |
+
+**How the budget is met**
+- **Routing and rewriting are one Qwen3-8B call** with structured output (intents plus rewritten search queries), saving a full LLM round trip per turn.
+- **Speculative retrieval:** retrieval starts on the partial transcript with the raw text while the router runs; if the turn isn't a RAG intent, the result is discarded.
+- **Prefetch at verification:** the account summary and open tasks are fetched while verification runs and cached ([section 11.4](#114-caching)), so common lookups don't call an API at all.
+- **Read APIs used on voice need a client-side latency SLO of P95 ≤ 800 ms**; where the client can't commit, prefetching and caching cover the common cases.
+- Qwen3-30B-A3B for voice turns where evals allow it (faster first token); prefix caching; voice has priority over chat in the model gateway.
+- Semantic end-of-turn detection instead of a fixed silence threshold, to shorten the VAD wait.
+- Stream every stage; the first sentence gets the deterministic rules only (≈ 10 ms), and the fast 8B check runs on each later sentence while the previous one plays.
+- Pre-synthesised fillers ("Let me check that for you") cover path ② and ③; for high-risk intents (eligibility, cases), the whole answer is verified first (trade-off 2 in [section 20](#20-known-trade-offs-and-open-questions)).
 
 ### Messaging apps: WeChat, WhatsApp, Telegram
 
@@ -1161,7 +1185,7 @@ Retrieval and grounded generation get their own test set and scores, separate fr
 | Citations | Citation precision (cited clause supports the sentence) and recall (every factual sentence cited) | Precision ≥ 0.98 |
 | Abstention | Correct "can't confirm" on unanswerable questions | ≥ 90% |
 | Voice | The 3-sentence answer keeps the key facts of the full answer | ≥ 95% |
-| Latency | Retrieval + rerank P95 | Voice 300 ms, chat 800 ms |
+| Latency | Retrieval + rerank P95 | Voice 250 ms, chat 800 ms |
 
 **When it runs:** every KB snapshot before the `kb_live` alias switches ([section 5.2](#52-ingestion)); every change to chunking, embedding, reranker, rewrite prompt or retrieval config; nightly as part of the full run. **Online:** no-hit rate, low-score rate and citation failures per document are monitored, and a spike on one document points to a bad chunk or a stale clause.
 
@@ -1363,7 +1387,7 @@ All three are correlated by `trace_id`.
 **Key alerts:**
 - citation-check failures;
 - refusal and handoff rates;
-- voice P95 from end of speech to first audio;
+- voice P95 time to first audio, P95 time to first substantive answer per path, filler rate and dead air;
 - vLLM queue depth and KV-cache usage;
 - core-API error rates;
 - verification failures per number;
@@ -1455,7 +1479,7 @@ Adding a region means a new profile: cloud region, model endpoints, channel adap
 
 **Pick one profile per client and never mix on the voice path.**
 - The voice loop (Genesys → voice gateway → STT → LLM → TTS → back) is latency-critical.
-- Every extra network hop, such as an on-prem gateway calling cloud speech and then an on-prem LLM, adds round trips and failure points and breaks the ~1 s budget.
+- Every extra network hop, such as an on-prem gateway calling cloud speech and then an on-prem LLM, adds round trips and failure points and breaks the voice latency budget in section 7.
 
 **Choosing a profile is a week-one decision with the client's compliance and legal teams.** Inputs:
 - data residency and outsourcing / cloud requirements (sector-regulator guidelines; the region's data law, such as PIPL, PDPO or GDPR);
@@ -1493,7 +1517,7 @@ The cloud profile replaces most of this with Bailian usage costs; the same assum
 | # | Topic | Trade-off or open question | Position taken |
 |---|---|---|---|
 | ⭐ 1 | **⭐ User IDs differ across systems** | **The OIDC `sub` (possibly pairwise per client) is not the ID each subsystem uses: CRM, billing, orders and legacy cores each have their own user or account IDs, often one-to-many. This design assumes a shared `customer_no`, which often doesn't hold.** | **Anchor on an enterprise `customer_id` (MDM), linked to `sub` once. An identity-mapping service keeps the cross-reference. The STS writes the target system's ID into each exchanged token per `aud`; legacy systems without OAuth get it via the internal gateway (`X-On-Behalf-Of`). IDs never come from the LLM. No mapping → fail closed and hand off. To be validated with the client's IAM and MDM teams in week one.** |
-| 2 | Voice latency vs verification | Answers must pass citation and compliance checks, but voice streams sentence by sentence. Once spoken, a sentence can't be retracted. | First sentence: deterministic rules only; each later sentence: rules + fast 8B while the previous one plays. For high-risk intents (eligibility, cases), play a short filler and verify the full answer first. Latency is traded for safety where it matters. |
+| 2 | Voice latency vs verification | Answers must pass citation and compliance checks, but voice streams sentence by sentence. Once spoken, a sentence can't be retracted. | First sentence: deterministic rules only; each later sentence: rules + fast 8B while the previous one plays. For high-risk intents (eligibility, cases), play a short filler and verify the full answer first. Latency is traded for safety where it matters. Per-path latency targets: [section 7](#7-channels-voice-vs-chat). |
 | 3 | Planning numbers | Latency budget, GPU sizing ([section 19](#rough-gpu-sizing-on-prem-profile-per-site)) and volumes are estimates | First sprint benchmarks speech, vLLM and retrieval on the client's hardware or region and resizes |
 | 4 | Speech quality per language (e.g. Cantonese) | Paraformer, SenseVoice and CosyVoice on domain terms, accents and code-switching are unproven for this domain | Launch chat first; gate voice on CER measured with anonymised real recordings; hotword lists |
 | 5 | Telephony integration | Bot integration capabilities differ between Genesys Cloud (AudioConnector) and Engage | Voice gateway behind an adapter; validate the exact integration in a Genesys test org |
@@ -1765,13 +1789,14 @@ LangGraph's `recursion_limit` counts super-steps of the **whole graph** per invo
 | Router (8B) | 1.5 s | Fall back to keyword routing, or ask what the customer needs |
 | Chat generation | First token 2 s; total 30 s | Retry once → smaller model → "can't answer right now" |
 | Voice generation | First token 600 ms | Play a filler and keep waiting; hand off after 3 s |
-| Retrieval + rerank | Voice 300 ms; chat 800 ms | Rewrite and retry once, then hand off |
+| Retrieval + rerank | Voice 250 ms; chat 800 ms | Rewrite and retry once, then hand off |
 | Read API | 2 s; up to 2 retries with exponential backoff | Circuit breaker; "can't retrieve that right now" |
 | Write API | 5 s; one retry **only with an idempotency key** | Check status first; never retry blindly |
 | Archived order history | 8 s | Voice says "one moment" |
 | Circuit breaker | Opens at > 50% errors over 30 s; half-open after 60 s | Degrade |
 | OCR / vision | 20 s | Ask the customer to submit another way |
-| Voice end of speech → first audio | ~1 s (budget in [section 7](#7-channels-voice-vs-chat)) | Filler |
+| Voice latency SLOs (P95) | First audio ≤ 1.0 s; first substantive answer ≤ 1.8 s (RAG) / 2.5 s (tool) / 3.5 s (high-risk); filler rate ≤ 30%; dead air ≤ 1.2 s ([section 7](#7-channels-voice-vs-chat)) | Alert; investigate by release and intent |
+| Read APIs used on voice | Latency SLO P95 ≤ 800 ms (agreed with the client; the 2 s above is the timeout) | Prefetch and cache; alert |
 | vLLM concurrency per channel | Set at the model gateway; capacity reserved for voice | Queue chat |
 | Voice model replicas | Minimum kept warm; never scale to zero | — |
 

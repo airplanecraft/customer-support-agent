@@ -8,6 +8,26 @@ Newest first. Each entry is written in English and Chinese. Diagram IDs refer to
 
 ---
 
+## v1.17 — 2026-11-26
+
+**English**
+- **Fix: the voice latency budget no longer contradicts itself.** "Routing and retrieval 150–300 ms" had to hold classification, rewrite, retrieval and rerank, while retrieval + rerank alone was budgeted at 300 ms.
+- **Four voice metrics instead of one:** time to first audio (≤ 1.0 s, fillers count), **time to first substantive answer** per path, filler rate (≤ 30%), dead air (≤ 1.2 s). A filler can no longer make the target look met.
+- **Budget per path that adds up:** ① FAQ / RAG ≤ 1.8 s, ② tool intent ≤ 2.5 s, ③ high-risk with whole-answer verification ≤ 3.5 s (P95).
+- **Routing and rewriting merged into one Qwen3-8B call**; speculative retrieval on partial transcripts; prefetch at verification; semantic end-of-turn detection.
+- **Timeouts vs latency SLOs separated:** read APIs used on voice need a client-agreed SLO of P95 ≤ 800 ms (2 s stays the timeout). Voice retrieval + rerank is 250 ms everywhere (sections 7, 15.4, A.5.6).
+- Updated: sections 1, 4.1, 5.3, 7, 15.4, 17 alerts, 19, trade-off 2, A.5.6; R2 diagram label.
+
+**中文**
+- **修复：语音延迟预算不再自相矛盾。** 原来"路由与检索 150–300 ms"要装下分类、改写、检索和重排，而光是检索 + 重排就预算了 300 ms。
+- **语音用四个指标代替一个：** 首次出声（≤ 1.0 秒，过渡语也算）、按路径的 **首个实质答案**、过渡语使用率（≤ 30%）、静音时长（≤ 1.2 秒）。过渡语不能再让指标看起来达标。
+- **按路径、能加总对上的预算：** ① FAQ / RAG ≤ 1.8 秒，② 调工具 ≤ 2.5 秒，③ 高风险整段校验 ≤ 3.5 秒（P95）。
+- **路由和改写合成一次 Qwen3-8B 调用**；在部分转写上做推测性检索；核验时预取；语义断句。
+- **超时和延迟目标分开：** 语音用到的只读 API 需与客户约定 P95 ≤ 800 毫秒（2 秒仍是超时）。语音的检索 + 重排统一为 250 毫秒（第 7、15.4 节和 A.5.6）。
+- 同步修改：第 1、4.1、5.3、7、15.4 节，第 17 节告警，第 19 节，取舍第 2 条，A.5.6；R2 图标注。
+
+---
+
 ## v1.16 — 2026-11-26
 
 **English**

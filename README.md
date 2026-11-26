@@ -49,6 +49,8 @@ It is designed for **regulated industries** (financial services, healthcare, tel
 - [Appendix A. System boundaries](#appendix-a-system-boundaries)
 - [Appendix B. Failure modes and degradation](#appendix-b-failure-modes-and-degradation)
 
+**Separate document:** [Phase 1 (lean) design](docs/phase1/README.md): what gets built first, sized for the actual load.
+
 ---
 
 ## 1. Context and requirements

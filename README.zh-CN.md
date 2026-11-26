@@ -1,6 +1,8 @@
 # 客服 Agent —— 语音 + 在线聊天参考架构
 
-[English](README.md) | **中文** · [更新记录](CHANGELOG.md)
+[English](README.md) | **中文** · [更新记录](CHANGELOG.md) · **[第一阶段（精简）设计](docs/phase1/README.zh-CN.md)**
+
+> 本文档是 **目标架构**。按实际负载、先要落地的部分，见单独的[第一阶段（精简）设计](docs/phase1/README.zh-CN.md)。
 
 **一个与行业无关的 AI 客服 agent 参考架构**：用同一套核心同时服务 **语音（Genesys 呼叫中心）** 和 **在线聊天（App、Web，以及微信、WhatsApp、Telegram 等消息应用）**，核心包括 **LangGraph** agent、**混合 RAG**、**guardrails（护栏）**、**评估** 和 **LLMOps**，模型统一使用 **阿里通义千问（Qwen）系列**。
 
@@ -1553,7 +1555,7 @@ owner: compliance
 | 4 | 各语言的语音质量（例如粤语） | Paraformer、SenseVoice 和 CosyVoice 在行业术语、口音和中英夹杂上的表现，在本领域还没有验证 | 先上线聊天；语音以匿名化真实录音测得的字错率为闸门；热词表 |
 | 5 | 电话系统集成 | Genesys Cloud（AudioConnector）和 Engage 的机器人集成能力不同 | 语音网关做在适配层后面；在 Genesys 测试组织里验证具体的集成方式 |
 | 6 | IdP 能力 | 不是所有 IdP 都支持 token exchange 和 CIBA | 兜底方案：内部 token 服务签发短期 JWT，通过 JWKS 校验 |
-| 7 | 第一阶段范围 | 完整组件（Kafka、Milvus、service mesh、Langfuse）对 MVP 来说太重 | 第一阶段：聊天 + RAG（pgvector，或用 Zvec 承载只读知识库快照），不用 Kafka；随业务量增长再加语音、事件和 service mesh |
+| 7 | 第一阶段范围 | 完整组件（20 多个服务、约 20 个基础组件、每站点 13–21 张 GPU）对每天约 2.6 万次会话来说太重 | 单独的 **[第一阶段（精简）设计](docs/phase1/README.zh-CN.md)**：模块化单体（4 个部署单元）、5–6 个基础组件、先上聊天、语音限 30 通、优先云上（本地 3–4 张 GPU），每个推迟的组件都有升级条件；安全核心不变 |
 | 8 | 成本与灾备 | GPU 灾备会让硬件翻倍；托管 API 把成本转成按量计费 | 每种形态做成本模型；GPU 灾备用温备，降级时转人工 |
 | 9 | Trace 里的 PII | Langfuse trace 包含对话内容 | Trace 前先脱敏；加密、保留期和访问控制；原始归档只有合规能访问 |
 | 10 | LLM-as-judge 的可靠性 | Judge 会漂移，也可能和人的判断不一致 | 校准（κ ≥ 0.8），每月复查，每次发布比较时锁定 judge 版本 |
@@ -1565,10 +1567,12 @@ owner: compliance
 ```
 docs/diagrams/*.drawio   可编辑的 draw.io 源文件（用 draw.io 或 VS Code 的 Draw.io 插件打开）
 docs/img/*.png           README 中使用的导出图片
+docs/phase1/             第一阶段（精简）设计，中英文
 tools/drawio_lib.py      生成组件图和时序图的小工具
 tools/gen_components.py  A1–A5, R1–R3
 tools/gen_sequences.py   B1–B5, C1–C9, D1–D2
 tools/gen_state.py       M1–M2, F1
+tools/gen_phase1.py      P2
 tools/gen_llmops.py      L1, G1, E1, E2, E3, P1
 ```
 
@@ -1577,6 +1581,7 @@ python3 tools/gen_components.py
 python3 tools/gen_sequences.py
 python3 tools/gen_llmops.py
 python3 tools/gen_state.py
+python3 tools/gen_phase1.py
 for f in docs/diagrams/*.drawio; do
   /Applications/draw.io.app/Contents/MacOS/draw.io -x -f png -s 1 -o "docs/img/$(basename "$f" .drawio).png" "$f"
 done

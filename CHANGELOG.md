@@ -8,6 +8,24 @@ Newest first. Each entry is written in English and Chinese. Diagram IDs refer to
 
 ---
 
+## v1.20 — 2026-11-26
+
+**English**
+- **New document: [Phase 1 (lean) design](docs/phase1/README.md)** (English and Chinese), separate from the target architecture. The target architecture (20+ services, ~20 infrastructure components, 13–21 GPUs per site) was heavy for ~26,000 sessions a day, and trade-off #7 had no matching design.
+- Phase 1: modular monolith with **4 deployable units** (agent app, worker, web BFF, voice gateway in 1b); **5–6 infrastructure components**; chat first, voice in 1b capped at 30 concurrent AI calls; cloud hosting first (no GPUs), on-prem ≈ 3–4 GPUs for chat, DR not doubled.
+- Every deferred component has an **upgrade trigger** (Kafka → outbox, Milvus → pgvector, mesh → ingress + NetworkPolicy, MCP servers → in-process tools, model gateway → library, Redis-cache → in-process, ELK → client's logging).
+- **The safety core is unchanged** and referenced, not copied (auth, confirmation, data classes, guardrails, boundaries, approvals, audit, degradation).
+- New diagram P2 (phase 1 deployment). Main README: entry link at the top; trade-off #7 and the repository layout point to the new document.
+
+**中文**
+- **新文档：[第一阶段（精简）设计](docs/phase1/README.zh-CN.md)**（中英文），和目标架构分开。目标架构（20 多个服务、约 20 个基础组件、每站点 13–21 张 GPU）对每天约 2.6 万次会话太重，而已知取舍第 7 条没有对应的设计。
+- 第一阶段：模块化单体，**4 个部署单元**（agent 应用、worker、Web BFF、1b 的语音网关）；**5–6 个基础组件**；先上聊天，1b 加语音并限 30 通；优先云上（不需要 GPU），本地聊天约 3–4 张 GPU，灾备不翻倍。
+- 每个推迟的组件都有 **升级条件**（Kafka → outbox、Milvus → pgvector、mesh → 入口网关 + NetworkPolicy、MCP server → 进程内工具、模型网关 → 库、Redis-cache → 进程内缓存、ELK → 客户的日志平台）。
+- **安全核心不变**，只引用、不复制（身份、确认、数据分级、护栏、边界、审批、审计、降级）。
+- 新图 P2（第一阶段部署）。主 README：顶部加入口链接；取舍第 7 条和仓库结构指向新文档。
+
+---
+
 ## v1.19 — 2026-11-26
 
 **English**

@@ -1,6 +1,8 @@
 # Customer Support Agent — Voice + Chat Reference Architecture
 
-**English** | [中文](README.zh-CN.md) · [Update history](CHANGELOG.md)
+**English** | [中文](README.zh-CN.md) · [Update history](CHANGELOG.md) · **[Phase 1 (lean) design](docs/phase1/README.md)**
+
+> This document is the **target architecture**. What gets built first, sized for the actual load, is in the separate [Phase 1 (lean) design](docs/phase1/README.md).
 
 **A vertical-agnostic reference architecture for an AI customer-support agent**, serving customers over **voice (Genesys contact centre)** and **online chat (app, web and messaging apps such as WeChat, WhatsApp and Telegram)** from one shared core: **LangGraph** agents, **hybrid RAG**, **guardrails**, **evaluation** and **LLMOps**, on **Alibaba Qwen / Tongyi models**.
 
@@ -1552,7 +1554,7 @@ The cloud profile replaces most of this with Bailian usage costs; the same assum
 | 4 | Speech quality per language (e.g. Cantonese) | Paraformer, SenseVoice and CosyVoice on domain terms, accents and code-switching are unproven for this domain | Launch chat first; gate voice on CER measured with anonymised real recordings; hotword lists |
 | 5 | Telephony integration | Bot integration capabilities differ between Genesys Cloud (AudioConnector) and Engage | Voice gateway behind an adapter; validate the exact integration in a Genesys test org |
 | 6 | IdP capabilities | Token exchange and CIBA are not supported everywhere | Fallback: an internal token service issuing short-lived JWTs, validated via JWKS |
-| 7 | Scope of phase 1 | The full component set (Kafka, Milvus, mesh, Langfuse) is heavy for an MVP | Phase 1: chat + RAG (pgvector, or Zvec for a read-only KB snapshot), no Kafka; add voice, events and the mesh as volume grows |
+| 7 | Scope of phase 1 | The full component set (20+ services, ~20 infrastructure components, 13–21 GPUs per site) is heavy for ~26,000 sessions a day | A separate **[Phase 1 (lean) design](docs/phase1/README.md)**: modular monolith (4 deployable units), 5–6 infrastructure components, chat first and voice capped at 30 calls, cloud hosting first (3–4 GPUs on-prem), with an upgrade trigger for every deferred component; the safety core is unchanged |
 | 8 | Cost and DR | GPU DR doubles hardware; managed APIs shift cost to usage | Cost model per profile; GPU DR as warm standby with human-handoff degradation |
 | 9 | PII in traces | Langfuse traces contain conversation content | Redact before tracing; encryption, retention and access control; compliance-only access to raw archives |
 | 10 | LLM-as-judge reliability | Judges drift and can disagree with humans | Calibrate (κ ≥ 0.8), re-check monthly, pin judge versions per release comparison |
@@ -1564,10 +1566,12 @@ The cloud profile replaces most of this with Bailian usage costs; the same assum
 ```
 docs/diagrams/*.drawio   editable draw.io sources (open in draw.io or the VS Code Draw.io extension)
 docs/img/*.png           exported previews used in this README
+docs/phase1/             Phase 1 (lean) design, English and Chinese
 tools/drawio_lib.py      tiny generator for component and sequence diagrams
 tools/gen_components.py  A1–A5, R1–R3
 tools/gen_sequences.py   B1–B5, C1–C9, D1–D2
 tools/gen_state.py       M1–M2, F1
+tools/gen_phase1.py      P2
 tools/gen_llmops.py      L1, G1, E1, E2, E3, P1
 ```
 
@@ -1576,6 +1580,7 @@ python3 tools/gen_components.py
 python3 tools/gen_sequences.py
 python3 tools/gen_llmops.py
 python3 tools/gen_state.py
+python3 tools/gen_phase1.py
 for f in docs/diagrams/*.drawio; do
   /Applications/draw.io.app/Contents/MacOS/draw.io -x -f png -s 1 -o "docs/img/$(basename "$f" .drawio).png" "$f"
 done

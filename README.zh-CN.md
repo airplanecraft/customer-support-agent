@@ -117,6 +117,7 @@
 | **MCP server** | Agent 和业务系统之间的工具层：账户、工单、订单、变更（仅草稿）和身份工具。LLM 只能看到这些工具，永远看不到原始 API（[4.6](#46-tool-与-api-契约)）。每个 server 有 **自己的 mTLS 客户端证书**，内部网关因此知道是哪个 server 在调用，只允许它访问自己的 API（例如变更 server 能建草稿，但不能读订单）。 |
 | **模型网关** | 模型路由、配额、按渠道和功能统计成本 |
 | **审批服务** | 员工审批，职责分离；自己执行已批准的草稿，再通知会话或客户 |
+| **确认服务** | 保存准备好的 T1 操作；记录渠道层发来的确认（按钮、语音确认节点、DTMF）；只执行已确认、未过期、未使用的操作 |
 | **通知服务** | 通话后发消息到聊天线程、推送通知或短信 |
 | **数据** | Postgres（checkpoint、任务、交互记录、审计索引）、Redis（会话、OTP、限流、缓存）、Milvus（向量 + BM25）、对象存储（条款、上传文件、录音）、Kafka（事件） |
 | **护栏库** | 运行时护栏与 rule-eval 服务共用的输入和输出规则（[第 14 节](#14-护栏-guardrails)） |
@@ -200,7 +201,7 @@
 | `account_agent` | Qwen3-8B | `get_accounts`, `get_account_detail`, `get_billing_history` | `billing_explain` | 已核验 |
 | `case_agent` | Qwen3-32B | `get_case_status`, `list_required_documents` | `case_guide`, `document_checklist` | 已核验 |
 | `service_agent` | Qwen3-32B | `create_change_draft`（**仅草稿**） | `profile_change`, `address_change`, `cancellation` | 已核验 + step-up |
-| `order_agent` | Qwen3-32B | `list_orders`, `search_order_history`, `get_order`, `get_spend_summary`, `track_shipment`, `quote_order`, `place_order`, `cancel_order`, `check_refund_eligibility`, `request_refund`, `get_refund_status`, `search_policy` | `order_lookup`, `returns_guide`, `refund_request` | 已核验；写操作需要明确确认 |
+| `order_agent` | Qwen3-32B | `list_orders`, `search_order_history`, `get_order`, `get_spend_summary`, `track_shipment`, `quote_order`, `place_order`, `preview_cancel`, `cancel_order`, `check_refund_eligibility`, `request_refund`, `get_refund_status`, `search_policy` | `order_lookup`, `returns_guide`, `refund_request` | 已核验；写操作需要明确确认 |
 
 ### 4.3 配置写在代码里，不写在 prompt 里
 
@@ -253,7 +254,7 @@ Skill 属于 **行业包**：换一个行业时替换这些文件夹，核心不
 | | `cancellation` | 引用条款解释后果（失去的权益、费用、冷静期），建取消请求任务，转人工。**不做挽留**（BND-SCP-07） | **路由器** |
 | `order_agent` | `order_lookup` | 根据模糊描述（日期、商品、金额）找到正确的订单 | 模型 |
 | | `returns_guide` | 按商品类别说明退货条件和步骤 | 模型 |
-| | `refund_request` | 报价 → 确认 → 提交；超过阈值则生成草稿等待审批 | **路由器** |
+| | `refund_request` | 准备 → 确认（由渠道确认）→ 执行；超过阈值则生成草稿等待审批 | **路由器** |
 | 共享 | `vulnerable_customer` | 发现情绪困扰或弱势迹象 → 语气温和、不推销、主动提供人工 | 路由器（情绪或关键词触发） |
 
 **SKILL.md 格式。** Front matter 是启动时由代码校验的元数据；正文是处理流程。
@@ -338,7 +339,7 @@ eval_tags: [cancellation]
 | 级别 | 例子 | 流程 |
 |---|---|---|
 | T0 · 只读 | 订单查询与历史、物流、退款进度、退货政策 | 直接调用 |
-| T1 · 客户确认后执行 | 下单；取消未发货订单；自动批准开关范围内的退款 | **Quote → 明确确认 → commit** |
+| T1 · 客户确认后执行 | 下单；取消未发货订单；自动批准开关范围内的退款 | **准备 → 确认（由渠道确认，不由模型）→ 执行** |
 | T2 · 草稿 + 人工审批 | 超过阈值或有风险标记的退款；账户变更 | 先出草稿，再审批（[C4](#9-业务流程)） |
 | T3 · AI 永不执行 | 修改收款银行账户或登记手机号 | 只能转人工 |
 
@@ -353,17 +354,22 @@ eval_tags: [cancellation]
 | `get_order(order_id)` | T0 | `GET /orders/{id}` |
 | `get_spend_summary(period, group_by?)` | T0 | `GET /customers/me/spend-summary` |
 | `track_shipment(order_id)` | T0 | `GET /orders/{id}/shipment` |
-| `quote_order(items, address_ref)` | T1 | `POST /orders:quote` → 摘要 + `confirmation_token` |
-| `place_order(confirmation_token)` | T1 | `POST /orders`，带 `Idempotency-Key` |
-| `cancel_order(order_id)` | T1 | `POST /orders/{id}:cancel`（仅未发货） |
-| `check_refund_eligibility(order_id)` | T0 | `GET /orders/{id}/refund-eligibility` |
-| `request_refund(order_id, reason)` | T1 / T2 | `POST /orders/{id}/refund-requests` |
+| `quote_order(items, address_ref)` | T1 准备 | `POST /orders:quote` → 模板摘要 + `confirmation_id` |
+| `place_order(confirmation_id)` | T1 执行 | `POST /orders`，带 `Idempotency-Key` |
+| `preview_cancel(order_id)` | T1 准备 | `GET /orders/{id}/cancellation-preview`（仅未发货）→ 摘要 + `confirmation_id` |
+| `cancel_order(confirmation_id)` | T1 执行 | `POST /orders/{id}:cancel` |
+| `check_refund_eligibility(order_id, reason_code)` | T1 准备 | `GET /orders/{id}/refund-eligibility` → 资格、金额、退款方式 + `confirmation_id` |
+| `request_refund(confirmation_id)` | T1 / T2 执行 | `POST /orders/{id}/refund-requests` |
 | `get_refund_status(request_id)` | T0 | `GET /refund-requests/{id}` |
 | `search_policy(query)` | T0 | 对退货和退款条款做 RAG；**不是 API** |
 
 **契约规则**
 - **每个 ID 都校验归属**（BOLA，OWASP API1）：每个 `order_id` 都要和 token 对应的 `customer_id` 对比（从不使用模型给的 ID）。
-- **T1 写操作两步提交。** Quote 返回一个签名的 `confirmation_token`（5 分钟有效，绑定客户和请求内容的 hash）。客户明确确认（聊天里点按钮；语音里说"是"或按 1）。Commit 只带这个 token，所以客户确认之后 LLM 改不了任何参数。
+- **T1 写操作：准备 → 确认 → 执行，由确认服务负责。**
+  - **准备**（只读）：`quote_order`、`preview_cancel` 和 `check_refund_eligibility` 根据系统数据（token 里的客户、订单、金额、支付方式、原因代码）算出要执行的具体操作，**存在服务端的确认服务里**。返回模板摘要和一个不透明、一次性的 `confirmation_id`（5 分钟有效）。
+  - **确认不经过 LLM：** 摘要 **由模板根据存下的操作渲染**，从不由 LLM 改写。聊天显示确认卡片，客户点按钮后由渠道层直接通知确认服务。语音在专门的确认节点按模板朗读，回答严格分类为"是"或"否"，听不清就改为按 1。确认服务记录 **由渠道确认**，以及时间和渠道。
+  - **执行：** `place_order`、`cancel_order` 和 `request_refund` **只接收 `confirmation_id`**，不接收模型给的任何业务参数。只有当这份操作已由渠道确认、未过期、未使用、且属于调用者时才会执行。**模型声称"客户已确认"不起任何作用。**
+  - T2 草稿（账户变更）不需要这一步，由人工审批保护。`request_refund` 一律走确认；之后由规则引擎决定自动批准（T1）还是生成草稿等待审批（T2）。
 - **幂等：** 每个写操作都带 `Idempotency-Key`（`task_id` + 步骤）；重放时返回原来的结果。
 - **结果要小：** 列表用 cursor 分页并设上限；每条只返回摘要（ID、日期、金额、状态、首个商品）。匹配太多 → 返回数量，请客户缩小范围。
 - **数字来自系统。** 合计和消费汇总由 API 计算；输出护栏检查回答里的金额与工具结果一致。
@@ -375,6 +381,7 @@ eval_tags: [cancellation]
 **退款**
 - **能否退款由退款规则引擎决定，不由 LLM 决定：** 退款期限、商品状态、金额、历史退款、风险标记。AI 负责带引用地解释退货政策。
 - **钱只退回原支付方式**，这样就堵住了"退到新账户"的攻击。
+- **原因用枚举的 `reason_code`**（损坏、与描述不符……）。客户的原话作为备注保存，从不参与任何判断。
 - **自动批准受开关控制**，配置在 `config/policy.yaml`，只能通过评审过的 PR 修改：
 
 ```yaml
@@ -738,13 +745,14 @@ channel_binding
 
 **订单（C5）。**
 - 历史：`search_order_history` 同时查询主库和归档库；结果只返回摘要，在会话内缓存；聊天显示订单卡片，语音逐步缩小范围。
-- 下单：quote → 客户明确确认摘要 → 用 `confirmation_token` 和幂等 key commit。
+- 下单：`quote_order` 把操作存进确认服务 → 客户通过渠道确认模板摘要（按钮，或语音说"是" / 按 1）→ `place_order` 只带 `confirmation_id` 和幂等 key。
 
 ![C5 Orders](docs/img/C5-orders.png)
 *C5 · 历史订单与下单 —— 源文件：[`C5-orders.drawio`](docs/diagrams/C5-orders.drawio)*
 
 **退款（C6）。**
 - AI 根据 RAG 带引用地解释退货政策；规则引擎决定能否退款。
+- 资格检查同时准备好这笔退款（`confirmation_id`）；客户通过渠道确认模板摘要；`request_refund` 只接收这个 ID。
 - 开关打开且金额低于阈值时，退款自动批准；否则变成草稿等人工审批，和 C4 一样。
 - 钱只退回原支付方式。
 
@@ -1017,7 +1025,7 @@ LangMem 还会自己发起 LLM 调用，这会绕过模型网关、prompt 版本
 | 1 · 输入 | 长度（≤ 1,000 字符）、按用户和客户端限流、日志和 trace 中的 PII 脱敏；**进入 LLM 前做假名化**（可还原的占位符，例如 `<ADDR_1>`，真实值存在会话级保险库里，只在工具内部替换回去）；证件号和卡号永不进入 LLM（用 DTMF 或结构化表单）；注入分类器、上传文件扫描（AV + CDR）且只使用净化后的副本、外部文本视为数据而非指令 |
 | 2 · 身份与路由 | Token 的 `aud`、`scope` 和 `acr`；角色 → 可达的 agent；每个意图的认证等级（核验或 step-up）；工具 = agent 白名单 ∩ 角色；循环与 token 上限（[附录 A](#附录-a-系统边界)） |
 | 3 · 检索 | 过滤条件根据 token 构建（按角色的可见性、按合同起始日的条款版本、`owner_id`），从不由模型决定 |
-| 4 · 工具 | 用窄 `aud` 和 `scope` 做 token exchange；归属检查加行级安全；写工具只生成草稿；幂等 key；客户确认类写操作走 quote → 确认 → commit；通过 `interrupt()` 人工审批；退款只退回原支付方式，由规则引擎决定；永不修改手机号或银行账户 |
+| 4 · 工具 | 用窄 `aud` 和 `scope` 做 token exchange；归属检查加行级安全；写工具只生成草稿；幂等 key；T1 写操作走 准备 → 确认（由渠道确认，不由模型）→ 执行；通过 `interrupt()` 人工审批；退款只退回原支付方式，由规则引擎决定；永不修改手机号或银行账户 |
 | 5 · 输出 | 引用检查（存在、确实检索到、版本正确）；快速忠实度检查（8B）；无约束性承诺；谈到条款时附免责声明；PII 泄漏检查；语言一致；语音回答 ≤ 3 句 |
 
 **一套规则，三种用途。** 每条规则在 Git 里定义一次（`evaluators/*.yaml`），用在三个地方：
@@ -1631,7 +1639,7 @@ T0–T3 分级见[第 4.6 节](#46-tool-与-api-契约)。
 |---|---|---|---|---|
 | BND-ACT-01 | **永不修改登记手机号或收款银行账户** | 根本没有这类工具（T3） | 转人工 | 社会工程；多轮分步请求 |
 | BND-ACT-02 | 退款 **只退回原支付方式**；能否退款由规则引擎决定 | 规则引擎 + API | 拒绝 | "退到我的新卡"、和 AI 争论退款资格 |
-| BND-ACT-03 | 客户确认类写操作只能走 **quote → 明确确认 → commit** | 签名的 `confirmation_token`，绑定请求内容 hash | 拒绝 | 确认后改参数；重放；文档里埋一个"是" |
+| BND-ACT-03 | **所有 T1 写操作**（下单、取消、退款）只能走 **准备 → 确认 → 执行**；确认由渠道层记录，绝不由模型声明；执行只接收 `confirmation_id` | 确认服务 | 拒绝 | 确认后替换订单号；重放 ID；注入"客户已确认"；文档里埋一个"是"；LLM 摘要与存下的操作不一致 |
 | BND-ACT-04 | **AI 永不审批**；审批需要人类员工 token，且审批人 ≠ 申请人 | 审批服务 | 拒绝；告警 | "我就是审批人"、伪造的 resume 内容 |
 | BND-ACT-05 | 只有开关打开、金额低于阈值且无风险标记时才自动退款 | `config/policy.yaml` + 规则引擎 | 转人工审批 | 把一笔退款拆成多笔小额；超过 30 天内次数 |
 | BND-ACT-06 | Worker 只能调用白名单 ∩ 角色内的工具 | 工具绑定 | 模型看不到该工具 | 打听隐藏的工具名；注入文本里写工具名 |
@@ -1698,7 +1706,7 @@ T0–T3 分级见[第 4.6 节](#46-tool-与-api-契约)。
 | 语音 access token | 10 分钟，不超过通话时长；没有 refresh token | 重新核验 |
 | 换出来的下游 token | 5 分钟 | 重新换取 |
 | Step-up 新鲜度 | `max_age = 300` 秒 | 再次 step-up |
-| `confirmation_token` | 5 分钟，一次性 | 重新 quote |
+| `confirmation_id` | 5 分钟，一次性；只有经渠道确认才会执行 | 重新准备 |
 | `survey_token` | 24 小时，一次性 | 作废 |
 | JWKS 缓存 | 1 小时；遇到不认识的 `kid` 立即刷新 | — |
 | 时钟偏差容忍 | 60 秒 | 拒绝 |

@@ -115,6 +115,7 @@ Both channels handle five kinds of request:
 | **MCP servers** | The tool layer between the agents and the systems of record: account, case, order, change (drafts only) and identity tools. The LLM only ever sees these tools, never the raw APIs ([4.6](#46-tool-and-api-contracts)). Each server has **its own mTLS client certificate**, so the internal gateway knows which server is calling and lets it reach only its own APIs (for example, the change server can create drafts but cannot read orders). |
 | **Model gateway** | Model routing, quotas, cost attribution per channel and feature |
 | **Approval service** | Staff approvals with separation of duties; executes the approved draft itself, then notifies the session or customer |
+| **Confirmation service** | Stores prepared T1 actions; records confirmations from the channel layer (button, voice confirmation node, DTMF); executes only confirmed, unexpired, unused actions |
 | **Notification service** | Post-call message to the chat thread, as a push notification, or by SMS |
 | **Data** | Postgres (checkpoints, tasks, interactions, audit index), Redis (sessions, OTP, rate limits, caches), Milvus (dense + BM25), object storage (clauses, uploads, recordings), Kafka (events) |
 | **Guardrail library** | Input and output rules shared by the runtime guardrails and the rule-eval service ([section 14](#14-guardrails)) |
@@ -198,7 +199,7 @@ In Anthropic's terms this is a **workflow, not an autonomous agent**: a routing 
 | `account_agent` | Qwen3-8B | `get_accounts`, `get_account_detail`, `get_billing_history` | `billing_explain` | verified |
 | `case_agent` | Qwen3-32B | `get_case_status`, `list_required_documents` | `case_guide`, `document_checklist` | verified |
 | `service_agent` | Qwen3-32B | `create_change_draft` (**draft only**) | `profile_change`, `address_change`, `cancellation` | verified + step-up |
-| `order_agent` | Qwen3-32B | `list_orders`, `search_order_history`, `get_order`, `get_spend_summary`, `track_shipment`, `quote_order`, `place_order`, `cancel_order`, `check_refund_eligibility`, `request_refund`, `get_refund_status`, `search_policy` | `order_lookup`, `returns_guide`, `refund_request` | verified; writes need explicit confirmation |
+| `order_agent` | Qwen3-32B | `list_orders`, `search_order_history`, `get_order`, `get_spend_summary`, `track_shipment`, `quote_order`, `place_order`, `preview_cancel`, `cancel_order`, `check_refund_eligibility`, `request_refund`, `get_refund_status`, `search_policy` | `order_lookup`, `returns_guide`, `refund_request` | verified; writes need explicit confirmation |
 
 ### 4.3 Configuration lives in code, not in prompts
 
@@ -251,7 +252,7 @@ Skills belong to the **domain pack**: another industry replaces the folders, not
 | | `cancellation` | Explain the consequences with citations (benefits lost, fees, cooling-off), create a cancellation request task, hand off. **No retention offers** (BND-SCP-07) | **Router** |
 | `order_agent` | `order_lookup` | Find the right order from vague descriptions (date, item, amount) | Model |
 | | `returns_guide` | Return eligibility and steps by product category | Model |
-| | `refund_request` | Quote → confirm → commit; above the threshold, a draft for approval | **Router** |
+| | `refund_request` | Prepare → confirm (by the channel) → commit; above the threshold, a draft for approval | **Router** |
 | shared | `vulnerable_customer` | Signs of distress or vulnerability → gentle tone, no selling, offer a human | Router (sentiment or keyword trigger) |
 
 **SKILL.md format.** Front matter is metadata that code checks at startup; the body is the procedure.
@@ -336,7 +337,7 @@ Static content goes first and dynamic content last, so **vLLM prefix caching** c
 | Tier | Examples | Flow |
 |---|---|---|
 | T0 · read | Order lookup and history, shipment, refund status, return policy | Direct call |
-| T1 · customer-confirmed write | Place an order; cancel an unshipped order; refunds under the auto-approval switch | **Quote → explicit confirmation → commit** |
+| T1 · customer-confirmed write | Place an order; cancel an unshipped order; refunds under the auto-approval switch | **Prepare → confirm (by the channel, not the model) → commit** |
 | T2 · draft + human approval | Refunds above the threshold or with risk flags; account changes | Draft, then approval ([C4](#9-business-flows)) |
 | T3 · never via AI | Change payout bank account or registered phone | Handoff only |
 
@@ -351,17 +352,22 @@ The boundaries these tiers enforce are listed in [Appendix A.2](#a2-action-bound
 | `get_order(order_id)` | T0 | `GET /orders/{id}` |
 | `get_spend_summary(period, group_by?)` | T0 | `GET /customers/me/spend-summary` |
 | `track_shipment(order_id)` | T0 | `GET /orders/{id}/shipment` |
-| `quote_order(items, address_ref)` | T1 | `POST /orders:quote` → summary + `confirmation_token` |
-| `place_order(confirmation_token)` | T1 | `POST /orders` with `Idempotency-Key` |
-| `cancel_order(order_id)` | T1 | `POST /orders/{id}:cancel` (unshipped only) |
-| `check_refund_eligibility(order_id)` | T0 | `GET /orders/{id}/refund-eligibility` |
-| `request_refund(order_id, reason)` | T1 / T2 | `POST /orders/{id}/refund-requests` |
+| `quote_order(items, address_ref)` | T1 prepare | `POST /orders:quote` → template summary + `confirmation_id` |
+| `place_order(confirmation_id)` | T1 commit | `POST /orders` with `Idempotency-Key` |
+| `preview_cancel(order_id)` | T1 prepare | `GET /orders/{id}/cancellation-preview` (unshipped only) → summary + `confirmation_id` |
+| `cancel_order(confirmation_id)` | T1 commit | `POST /orders/{id}:cancel` |
+| `check_refund_eligibility(order_id, reason_code)` | T1 prepare | `GET /orders/{id}/refund-eligibility` → eligibility, amount, method + `confirmation_id` |
+| `request_refund(confirmation_id)` | T1 / T2 commit | `POST /orders/{id}/refund-requests` |
 | `get_refund_status(request_id)` | T0 | `GET /refund-requests/{id}` |
 | `search_policy(query)` | T0 | RAG over return and refund terms; **not an API** |
 
 **Contract rules**
 - **Ownership on every ID** (BOLA, OWASP API1): each `order_id` is checked against the token's `customer_id` (never an ID from the model).
-- **Two-step commit for T1 writes.** The quote returns a signed `confirmation_token` (5 minutes, bound to the customer and a hash of the payload). The customer confirms explicitly (a button in chat; "yes" or DTMF 1 on voice). The commit carries only the token, so the LLM can't change parameters after confirmation.
+- **T1 writes: prepare → confirm → commit, through the confirmation service.**
+  - **Prepare** (read only): `quote_order`, `preview_cancel` and `check_refund_eligibility` work out the exact action from system data (customer from the token, order, amount, payment method, reason code) and **store it server-side in the confirmation service**. They return a template summary and an opaque, single-use `confirmation_id` (5 minutes).
+  - **Confirm, outside the LLM:** the summary is rendered **by template from the stored action**, never paraphrased by the LLM. Chat shows a confirmation card, and the button click goes from the channel layer straight to the confirmation service. Voice reads the template in a dedicated confirmation node; the answer is classified strictly as yes or no, and anything unclear falls back to DTMF 1. The confirmation service records **confirmed by the channel**, with time and channel.
+  - **Commit:** `place_order`, `cancel_order` and `request_refund` take **only the `confirmation_id`**, no business parameters from the model. The stored action runs only if it was confirmed by the channel, hasn't expired or been used, and belongs to the caller. **A model's claim that "the customer confirmed" carries no weight.**
+  - T2 drafts (account changes) don't need this step; human approval protects them. `request_refund` always goes through confirmation; the rules engine then decides auto-approval (T1) or a draft for approval (T2).
 - **Idempotency:** every write takes `Idempotency-Key` (`task_id` + step); a replay returns the original result.
 - **Small results:** lists are paginated with a cursor and capped; each item is a summary (ID, date, amount, status, first item). Too many matches → return the count and ask the customer to narrow it down.
 - **Numbers come from the system.** Totals and spend summaries are computed by the API; the output guardrail checks that amounts in the answer match tool results.
@@ -373,6 +379,7 @@ The boundaries these tiers enforce are listed in [Appendix A.2](#a2-action-bound
 **Refunds**
 - **Eligibility is decided by the refund rules engine, not the LLM:** window, item state, amount, prior refunds, risk flags. The AI explains the return policy with citations.
 - **Money only returns to the original payment method**, which closes the "refund to a new account" attack.
+- **The reason is an enum `reason_code`** (faulty, not as described, …). The customer's own words are kept as a note and never drive a decision.
 - **Auto-approval is behind a switch** in `config/policy.yaml`, changed only through a reviewed pull request:
 
 ```yaml
@@ -737,13 +744,14 @@ Ownership checks always compare against the **token**, never an ID the model sup
 
 **Orders (C5).**
 - History: `search_order_history` queries the main store and the archive; results are summaries, cached for the session; chat shows order cards, voice narrows down.
-- Placing an order: quote → the customer confirms the summary explicitly → commit with the `confirmation_token` and an idempotency key.
+- Placing an order: `quote_order` stores the action in the confirmation service → the customer confirms a template summary through the channel (button, or "yes" / DTMF 1 on voice) → `place_order` with only the `confirmation_id` and an idempotency key.
 
 ![C5 Orders](docs/img/C5-orders.png)
 *C5 · Order history and placing an order — source: [`C5-orders.drawio`](docs/diagrams/C5-orders.drawio)*
 
 **Refund (C6).**
 - The AI explains the return policy from RAG with citations; the rules engine decides eligibility.
+- The eligibility check prepares the refund (`confirmation_id`); the customer confirms a template summary through the channel; `request_refund` takes only the ID.
 - With the switch on and the amount under the threshold, the refund is approved automatically; otherwise it becomes a draft for human approval, as in C4.
 - Money only returns to the original payment method.
 
@@ -1016,7 +1024,7 @@ Defence in depth: any layer can refuse, require step-up, or hand off to a human,
 | 1 · Input | Length (≤ 1,000 characters), rate limits per user and client, PII redacted in logs and traces; **pseudonymised for the LLM** (reversible placeholders such as `<ADDR_1>`, real values held in a per-session vault and substituted only inside tools); ID and card numbers never reach the LLM (DTMF or structured forms); injection classifier, uploads scanned (AV + CDR) with only the clean copy used, external text treated as data rather than instructions |
 | 2 · Identity and routing | Token `aud`, `scope` and `acr`; role → reachable agents; assurance level per intent (verify or step-up); tools = agent allowlist ∩ role; loop and token caps ([Appendix A](#appendix-a-system-boundaries)) |
 | 3 · Retrieval | Filters built from the token (visibility by role, clause version by contract start date, `owner_id`), never from the model |
-| 4 · Tools | Token exchange with a narrow `aud` and `scope`; ownership check plus row-level security; write tools that only create drafts; idempotency keys; quote → confirm → commit for customer-confirmed writes; human approval via `interrupt()`; refunds only to the original payment method, decided by the rules engine; never change phone or bank account |
+| 4 · Tools | Token exchange with a narrow `aud` and `scope`; ownership check plus row-level security; write tools that only create drafts; idempotency keys; prepare → confirm (by the channel, not the model) → commit for T1 writes; human approval via `interrupt()`; refunds only to the original payment method, decided by the rules engine; never change phone or bank account |
 | 5 · Output | Citation check (exists, was retrieved, correct version); fast faithfulness check (8B); no binding commitment; disclaimer when terms are discussed; PII leak check; language match; voice answers ≤ 3 sentences |
 
 **One rule set, three uses.** Each rule is defined once in Git (`evaluators/*.yaml`) and used in three places:
@@ -1630,7 +1638,7 @@ Tiers T0–T3 are defined in [section 4.6](#46-tool-and-api-contracts).
 |---|---|---|---|---|
 | BND-ACT-01 | **Never change the registered phone or payout bank account** | No such tool exists (T3) | Handoff | Social engineering; staged multi-turn requests |
 | BND-ACT-02 | Refunds go **only to the original payment method**; eligibility is decided by the rules engine | Rules engine + API | Rejected | "Refund to my new card", arguing eligibility with the AI |
-| BND-ACT-03 | Customer-confirmed writes only via **quote → explicit confirmation → commit** | Signed `confirmation_token` bound to the payload hash | Rejected | Changing parameters after confirmation; replay; a "yes" planted in a document |
+| BND-ACT-03 | **Every T1 write** (order, cancellation, refund) only via **prepare → confirm → commit**; the confirmation is recorded by the channel layer, never claimed by the model; commit takes only the `confirmation_id` | Confirmation service | Rejected | Swapping the order ID after confirmation; replaying an ID; injected "the customer has confirmed"; a "yes" planted in a document; an LLM summary that differs from the stored action |
 | BND-ACT-04 | **The AI never approves**; approval needs a human staff token and approver ≠ requester | Approval service | Rejected; alert | "I'm the approver", forged resume payloads |
 | BND-ACT-05 | Auto-refund only when the switch is on, the amount is under the threshold and there are no risk flags | `config/policy.yaml` + rules engine | Goes to human approval | Splitting one refund into many small ones; exceeding the 30-day count |
 | BND-ACT-06 | Workers can only call tools in their allowlist ∩ role | Tool binding | The tool isn't visible to the model | Asking for hidden tool names; tool names in injected text |
@@ -1697,7 +1705,7 @@ Numeric limits: timeouts, loop caps, token budgets, rate limits and retention. *
 | Voice access token | 10 min, never beyond the call; no refresh token | Re-verify |
 | Exchanged downstream token | 5 min | Exchange again |
 | Step-up freshness | `max_age = 300` s | Step-up again |
-| `confirmation_token` | 5 min, single use | Quote again |
+| `confirmation_id` | 5 min, single use; runs only if confirmed by the channel | Prepare again |
 | `survey_token` | 24 h, single use | Void |
 | JWKS cache | 1 h; refreshed immediately on an unknown `kid` | — |
 | Clock-skew leeway | 60 s | Rejected |

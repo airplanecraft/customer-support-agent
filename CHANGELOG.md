@@ -8,6 +8,24 @@ Newest first. Each entry is written in English and Chinese. Diagram IDs refer to
 
 ---
 
+## v1.16 — 2026-11-26
+
+**English**
+- **Fix: the T1 contract now covers every customer-confirmed write**, not just placing an order. `cancel_order` and `request_refund` previously took model-supplied arguments with no quote or token, so BND-ACT-03 only protected orders.
+- All T1 writes are now **prepare → confirm → commit** through a new **confirmation service**: prepare tools (`quote_order`, new `preview_cancel`, `check_refund_eligibility`) store the exact action server-side and return a `confirmation_id`; commit tools take only that ID.
+- **Consent is recorded by the channel layer, not claimed by the model**: a template summary rendered from the stored action (never LLM-paraphrased); chat confirmation button; voice confirmation node with DTMF fallback.
+- Refund reasons become an enum `reason_code`. T2 drafts stay protected by human approval.
+- Updated: 4.6, components, order skill, section 9, C5 and C6 diagrams, guardrail layer 4, BND-ACT-03 (new red-team cases), A.5.2 (`confirmation_token` → `confirmation_id`).
+
+**中文**
+- **修复：T1 契约现在覆盖所有客户确认类写操作**，而不只是下单。之前 `cancel_order` 和 `request_refund` 直接接收模型给的参数，没有 quote 也没有 token，所以 BND-ACT-03 实际只保护了下单。
+- 所有 T1 写操作改为通过新的 **确认服务** 走 **准备 → 确认 → 执行**：准备类工具（`quote_order`、新增的 `preview_cancel`、`check_refund_eligibility`）把具体操作存在服务端并返回 `confirmation_id`；执行类工具只接收这个 ID。
+- **同意由渠道层记录，不由模型声明**：摘要按模板根据存下的操作渲染（不经 LLM 改写）；聊天用确认按钮；语音用确认节点，听不清就按 1。
+- 退款原因改为枚举的 `reason_code`。T2 草稿仍由人工审批保护。
+- 同步修改：4.6、组件表、订单 skill、第 9 节、C5 和 C6 图、护栏第 4 层、BND-ACT-03（新增红队测试）、A.5.2（`confirmation_token` → `confirmation_id`）。
+
+---
+
 ## v1.15 — 2026-11-25
 
 **English**

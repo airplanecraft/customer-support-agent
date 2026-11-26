@@ -1155,7 +1155,7 @@ expect:
 - Capability cases use the mean pass rate and must not regress against the production release.
 - Flaky cases are listed separately and triaged: agent problem or badly written case.
 
-**Simulator QA.** A sample of simulated conversations is reviewed by people every release. If the simulator drifts out of persona or leaks the answer, the run is marked **simulator failure** and never counted against the agent.
+**Simulator QA.** A sample of simulated conversations is reviewed by people every release. If the simulator drifts out of persona, leaks the answer, or **over-cooperates** (volunteers information the agent didn't ask for, completes the agent's sentences), the run is marked **simulator failure** and never counted against the agent. The simulator may share the agent's model family; a small set of Cantonese scenarios is also run with real human testers as a control.
 
 **Coverage.** Intent × channel × language × persona, plus every boundary (`BND-…`) and failure mode (`FM-…`). CI reports empty cells.
 
@@ -1222,10 +1222,10 @@ Retrieval and grounded generation get their own test set and scores, separate fr
    - pass/fail or a 3-point scale with anchored descriptions;
    - reasoning before the verdict, structured output;
    - a reference answer when available;
-   - the **judge model differs from the generator** (8B online, 32B for release gates);
+   - **judges may share the generator's family, or even be the same model; independence is measured, not assumed** (see human review below). The release-gate judge is Qwen3-32B, the same model that writes clause answers, so its self-preference is tested explicitly;
    - position swap for pairwise comparisons;
    - **the judge calls our own model gateway**, so trace data never leaves the environment.
-3. **Human review:** before a judge can gate releases it must reach **κ ≥ 0.8 against about 200 compliance-labelled cases**. Drift is re-checked monthly. Disputed and low-score cases go to annotation queues.
+3. **Human review:** before a judge can gate releases it must reach **κ ≥ 0.8 against about 200 compliance-labelled cases**, measured per judge. **Self-preference test:** the calibration set includes outputs from the model under test; the judge must also reach κ ≥ 0.8 on that slice and must not score it systematically higher than humans do, otherwise it can't gate releases. Re-checked whenever the judge or the generator changes, and monthly for drift. Disputed and low-score cases go to annotation queues.
 
 **Example evaluator definition** (`evaluators/no_refund_promise.yaml`):
 

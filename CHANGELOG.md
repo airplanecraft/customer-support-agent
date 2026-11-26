@@ -8,6 +8,22 @@ Newest first. Each entry is written in English and Chinese. Diagram IDs refer to
 
 ---
 
+## v1.18 — 2026-11-26
+
+**English**
+- **Fix: removed the inaccurate claim that the judge differs from the generator.** The release-gate judge (Qwen3-32B) is the same model that writes clause answers, and the user simulator is Qwen3-32B too.
+- Decision: **stay within the Qwen family; independence is measured, not assumed.** A different family is not automatically better (its own biases, weaker Cantonese).
+- **Self-preference test** in judge calibration: the calibration set includes the model-under-test's own outputs; the judge must reach κ ≥ 0.8 on that slice and must not score it systematically higher than humans. Measured per judge; re-checked on any judge or generator change and monthly.
+- **Simulator QA** now also flags over-cooperation; a small set of Cantonese scenarios runs with real human testers as a control.
+
+**中文**
+- **修复：删掉了"judge 与生成模型不同"这句不准确的说法。** 发布闸门的 judge（Qwen3-32B）和写条款回答的是同一个模型，用户模拟器也是 Qwen3-32B。
+- 决定：**继续全部用 Qwen；独立性靠测量，不靠假设。** 换家族不一定更好（有自己的偏差，粤语可能更弱）。
+- judge 校准加入 **自评偏差测试**：校准集里放入被测模型自己的输出；judge 在这部分上也要达到 κ ≥ 0.8，且不能系统性偏高。每个 judge 单独计算；换 judge 或生成模型时重测，每月复查。
+- **模拟器质检** 增加"太配合"检查；少量粤语场景由真人测试员跑一遍作为对照。
+
+---
+
 ## v1.17 — 2026-11-26
 
 **English**

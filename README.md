@@ -24,7 +24,7 @@ It is designed for **regulated industries** (financial services, healthcare, tel
 
 ## Contents
 
-1. [Context and requirements](#1-context-and-requirements)
+1. [Context and requirements](#1-context-and-requirements) · [business metrics and cost model](#business-metrics-and-cost-model)
 2. [Architecture overview](#2-architecture-overview)
 3. [Deployment, network zones and transport security](#3-deployment-network-zones-and-transport-security)
 4. [Agent design](#4-agent-design)
@@ -93,6 +93,43 @@ Both channels handle five kinds of request:
 
 ![A1 System context](docs/img/A1-system-context.png)
 *A1 · System context — source: [`A1-system-context.drawio`](docs/diagrams/A1-system-context.drawio)*
+
+
+### Business metrics and cost model
+
+Whether this system saves money is decided mostly by the **handoff rate**. The definitions and formulas below are fixed; the numbers are starting points, to be replaced by the client's data and measurements from shadow mode ([15.7](#157-replay-and-shadow-mode)).
+
+**Containment, strict definition.** A session counts as contained only if all four hold:
+1. the AI handled it to the end, with no handoff;
+2. no contact about the same intent within 7 days;
+3. not abandoned mid-flow;
+4. if the customer rated it, CSAT is not 1–2.
+
+It is always read together with CSAT and the 7-day repeat-contact rate, so containment can never be raised by making handoff harder.
+
+**Targets (starting points)**
+
+| Stage | Containment (strict) | Handoff rate |
+|---|---|---|
+| Chat at launch | 40–50% | ≈ 50% |
+| Chat after 6 months | ≥ 60% | ≤ 35% |
+| Voice, highest-volume intents only | 25–35% | ≈ 65% |
+
+**Cost model**
+- **AI cost per session** = tokens × unit price + speech minutes × unit price + fixed platform cost per session (cloud: Bailian prices; on-prem: GPU and server depreciation). The **baseline is measured in shadow mode** and recorded here; the "> 2× baseline" cost alert ([A.5.5](#a55-token-and-cost-budgets)) refers to it.
+- **Human cost per contact** = AHT ÷ concurrency × fully loaded cost per agent hour.
+- **Daily saving** = contained sessions × human cost per contact + handed-off contacts × AHT saved by the handoff packet × cost per agent minute − all AI sessions × AI cost per session − fixed platform cost per day. Every AI session costs money, including the ones that are handed off.
+- **Break-even containment** ≈ (AI cost per session + fixed cost per session) ÷ human cost per contact, ignoring the AHT saving.
+- **Target: AI cost per session ≤ 20% of the human cost per contact.** Break-even then sits around 20–25% containment, so the targets above leave a margin.
+
+**Agent capacity (illustrative).** Using the volumes above (20,000 chats and 6,000 calls a day). The real numbers come from Erlang C with the client's interval data, AHT, service level and shrinkage.
+
+| | Without AI | With AI at the targets |
+|---|---|---|
+| **Voice** | Peak hour ≈ 720 calls, AHT 6 min → ≈ 72 Erlangs → ≈ 85 agents for 80% answered in 20 s; with 30% shrinkage ≈ **120 scheduled** | 30% containment, AHT −15% from the handoff packet → ≈ 43 Erlangs → ≈ 50 agents, ≈ **70 scheduled** |
+| **Chat** | Peak hour ≈ 2,000 chats, AHT 8 min, 2.5 chats per agent → ≈ **107 agents** online | 50% containment → ≈ **45–55 agents** |
+
+**Business dashboard:** containment (strict) by channel, intent and release; handoff rate by reason; AI cost per session and per contained session; AHT of handed-off contacts (the packet's effect); agent hours saved; CSAT for AI only, AI then human, and human only; 7-day repeat-contact rate.
 
 ---
 
@@ -1425,7 +1462,7 @@ All three are correlated by `trace_id`.
 - vLLM queue depth and KV-cache usage;
 - core-API error rates;
 - verification failures per number;
-- cost per conversation;
+- cost per conversation against the measured baseline ([business metrics](#business-metrics-and-cost-model)); containment (strict) and handoff rate by reason;
 - CSAT or resolved rate dropping against baseline, by channel and release.
 
 ### Customer satisfaction
@@ -1817,7 +1854,7 @@ LangGraph's `recursion_limit` counts super-steps of the **whole graph** per invo
 | Per session | Cumulative | 200k | 80k | Offer a human; alert |
 | Per customer per day | Cumulative | 1M tokens or 20 sessions | Same | Rate-limited; flagged as possible abuse |
 | Global | Daily budget per channel | Model-gateway quota | Voice has priority | Throttle chat first to protect voice |
-| Cost alert | Cost per conversation, P95 | > 2× baseline | Same | Alert; break down by release and intent |
+| Cost alert | Cost per conversation, P95 | > 2× the baseline measured in shadow mode ([business metrics](#business-metrics-and-cost-model)) | Same | Alert; break down by release and intent |
 
 #### A.5.6 Model, retrieval and tool latency
 

@@ -12,14 +12,15 @@
 
 1. [Scope](#1-scope)
 2. [Load and sizing assumptions](#2-load-and-sizing-assumptions)
-3. [Architecture](#3-architecture)
-4. [Differences from the target architecture and upgrade triggers](#4-differences-from-the-target-architecture-and-upgrade-triggers)
-5. [Safety core that is not simplified](#5-safety-core-that-is-not-simplified)
-6. [Key flows in phase 1](#6-key-flows-in-phase-1)
-7. [Models and GPUs](#7-models-and-gpus)
-8. [Testing and release](#8-testing-and-release)
-9. [Operations](#9-operations)
-10. [Criteria for moving to phase 2](#10-criteria-for-moving-to-phase-2)
+3. [Business targets](#3-business-targets)
+4. [Architecture](#4-architecture)
+5. [Differences from the target architecture and upgrade triggers](#5-differences-from-the-target-architecture-and-upgrade-triggers)
+6. [Safety core that is not simplified](#6-safety-core-that-is-not-simplified)
+7. [Key flows in phase 1](#7-key-flows-in-phase-1)
+8. [Models and GPUs](#8-models-and-gpus)
+9. [Testing and release](#9-testing-and-release)
+10. [Operations](#10-operations)
+11. [Criteria for moving to phase 2](#11-criteria-for-moving-to-phase-2)
 
 ---
 
@@ -55,7 +56,22 @@ These are starting points; the first sprint benchmarks them, as in the target ar
 
 ---
 
-## 3. Architecture
+## 3. Business targets
+
+Definitions, formulas and the capacity method are in the target architecture ([Business metrics and cost model](../../README.md#business-metrics-and-cost-model)); these are the phase-1 numbers.
+
+| Metric | Phase 1 (chat) | Phase 1b (voice, top intents) |
+|---|---|---|
+| Containment, strict | 40–50% at launch; **≥ 60% after 6 months** | 25–35% |
+| Handoff rate | ≈ 50% at launch; ≤ 35% after 6 months | ≈ 65% |
+| AI cost per session | Baseline measured in shadow mode; **≤ 20% of the human cost per contact** | Same rule |
+| Break-even containment | ≈ 20–25% | ≈ 20–25% |
+| Agents (illustrative) | Chat: ≈ 107 online without AI → ≈ 55–65 at launch → ≈ 45–55 at 60% | Voice: ≈ 120 scheduled → ≈ 70 |
+| Guard metrics | CSAT for AI-only sessions not below the human baseline; 7-day repeat-contact rate not rising | Same |
+
+---
+
+## 4. Architecture
 
 ![P2 Phase 1 deployment](../img/P2-phase1-deployment.png)
 *P2 · Phase 1 deployment — source: [`P2-phase1-deployment.drawio`](../diagrams/P2-phase1-deployment.drawio)*
@@ -75,7 +91,7 @@ These are starting points; the first sprint benchmarks them, as in the target ar
 
 ---
 
-## 4. Differences from the target architecture and upgrade triggers
+## 5. Differences from the target architecture and upgrade triggers
 
 | Target architecture | Phase 1 | Upgrade when |
 |---|---|---|
@@ -94,7 +110,7 @@ Kafka-specific and Milvus-specific failure modes in [Appendix B](../../README.md
 
 ---
 
-## 5. Safety core that is not simplified
+## 6. Safety core that is not simplified
 
 Phase 1 implements these exactly as specified in the target architecture:
 
@@ -113,7 +129,7 @@ Phase 1 implements these exactly as specified in the target architecture:
 
 ---
 
-## 6. Key flows in phase 1
+## 7. Key flows in phase 1
 
 | Flow | Phase 1 behaviour | Reference |
 |---|---|---|
@@ -126,7 +142,7 @@ Phase 1 implements these exactly as specified in the target architecture:
 
 ---
 
-## 7. Models and GPUs
+## 8. Models and GPUs
 
 **Cloud profile (first choice):** Bailian Qwen for the LLMs and Bailian speech in phase 1b. **No GPUs.** Cost follows usage.
 
@@ -143,7 +159,7 @@ Phase 1 implements these exactly as specified in the target architecture:
 
 ---
 
-## 8. Testing and release
+## 9. Testing and release
 
 The testing approach is the target architecture's ([15](../../README.md#15-evaluation-and-testing)), at a smaller size:
 
@@ -156,7 +172,7 @@ The testing approach is the target architecture's ([15](../../README.md#15-evalu
 
 ---
 
-## 9. Operations
+## 10. Operations
 
 - **Observability:** Langfuse for LLM traces and scores; Prometheus and Grafana for health; the client's logging platform for service logs; correlated by `trace_id`.
 - **Alerts:** the target architecture's key alerts that apply to chat (citation failures, handoff rate, latency, error rates, cost per conversation, CSAT), plus outbox lag.
@@ -165,9 +181,9 @@ The testing approach is the target architecture's ([15](../../README.md#15-evalu
 
 ---
 
-## 10. Criteria for moving to phase 2
+## 11. Criteria for moving to phase 2
 
-- Shadow mode and the first months of production meet the agreed thresholds for task success, correct handoff and citation accuracy.
+- Shadow mode and the first months of production meet the agreed thresholds for task success, correct handoff and citation accuracy, and the [business targets](#3-business-targets): **chat containment (strict) ≥ 60%**, AI cost per session ≤ 20% of the human cost per contact.
 - **Zero** boundary violations (A.1–A.4) over the period.
 - CSAT for AI-only sessions not below the human baseline.
-- Then add components **only when their trigger in section 4 is met**, and add channels and intents from the target architecture one at a time.
+- Then add components **only when their trigger in [section 5](#5-differences-from-the-target-architecture-and-upgrade-triggers) is met**, and add channels and intents from the target architecture one at a time.
